@@ -1,0 +1,38 @@
+name: Linux validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, asan, release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Install virtual display tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+      - name: Fetch pinned engine dependencies
+        run: nix develop --no-write-lock-file --command just deps
+      - name: Build and test
+        run: nix develop --no-write-lock-file --command bash -c 'VK_DRIVER_FILES="$VSIM_SOFTWARE_VULKAN_ICD" bash scripts/check.sh "$1"' -- "${{ matrix.preset }}"
+      - name: Window presentation and resize
+        run: nix develop --no-write-lock-file --command bash -c 'VK_DRIVER_FILES="$VSIM_SOFTWARE_VULKAN_ICD" xvfb-run -a "build/$1/vsim_renderer_tests" --window' -- "${{ matrix.preset }}"
+      - name: Runtime-only installation
+        if: matrix.preset == 'release'
+        run: |
+          nix develop --no-write-lock-file --command cmake --install build/release --prefix "$RUNNER_TEMP/vsim"
+          test ! -e "$RUNNER_TEMP/vsim/bin/vsim_editor"
+          "$RUNNER_TEMP/vsim/bin/vsim_runtime" --scene "$RUNNER_TEMP/vsim/share/vsim/scenes/conformance.json" --ticks 120
+      - name: Test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/Testing/Temporary/

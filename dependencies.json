@@ -1,0 +1,20 @@
+{
+  "nvrhi": {
+    "url": "https://github.com/NVIDIA-RTX/NVRHI.git",
+    "revision": "cca66aeb084429c880d205e508f5276b6ac13c38",
+    "license": "MIT",
+    "nix_hash": "sha256-Vik/25DYm9F4sj4fDVfZDmPDalZW5SaSmmknTqDx/zg="
+  },
+  "jolt": {
+    "url": "https://github.com/jrouwe/JoltPhysics.git",
+    "revision": "0373ec0dd762e4bc2f6acdb08371ee84fa23c6db",
+    "license": "MIT",
+    "nix_hash": "sha256-Vh4SLRyA9EtYCaulA7kI3CtCioJvEoSyuAXZJmDRTB8="
+  },
+  "vulkan_headers": {
+    "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+    "revision": "015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9",
+    "license": "Apache-2.0 OR MIT",
+    "nix_hash": "sha256-pUxPwFGbOzP8ymTooeA1slFWEFsRoqUROSnndVtLiY8="
+  }
+}

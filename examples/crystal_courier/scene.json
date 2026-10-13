@@ -1,0 +1,553 @@
+{
+  "version": 1,
+  "next_id": 43,
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "name": "GameController",
+        "script": {
+          "source": "-- Turn-based rules run entirely in VSim. The terminal client only supplies input and draws entities.\nlocal player, status\nlocal walls, crystals, traps = {}, {}, {}\nlocal exit_x, exit_z\nlocal moves, collected, total = 0, 0, 0\nlocal finished = false\n\nlocal function message(text)\n    -- Messages contain fixed ASCII text and formatted integers, never external strings.\n    engine.set(status, '{\"name\":\"Status: ' .. text .. '\"}')\nend\n\nlocal function at(id, x, z)\n    local ex, _, ez = engine.position(id)\n    return ex == x and ez == z\nend\n\nfunction on_start(self)\n    for _, id in ipairs(engine.entities()) do\n        local name = engine.name(id)\n        if name == \"Player\" then\n            assert(player == nil, \"Expected one Player\")\n            player = id\n        elseif string.sub(name, 1, 8) == \"Status: \" then\n            assert(status == nil, \"Expected one Status entity\")\n            status = id\n        elseif name == \"Wall\" then\n            table.insert(walls, id)\n        elseif name == \"Crystal\" then\n            table.insert(crystals, id)\n        elseif name == \"Trap\" then\n            table.insert(traps, id)\n        elseif name == \"Exit\" then\n            assert(exit_x == nil, \"Expected one Exit\")\n            local x, _, z = engine.position(id)\n            exit_x, exit_z = x, z\n        end\n    end\n    assert(player and status and exit_x, \"Game needs Player, Status, and Exit entities\")\n    total = #crystals\n    message(\"Collect all \" .. total .. \" crystals, then reach E. Avoid X.\")\nend\n\nfunction on_update(self, dt)\n    if finished then return end\n    local dx, dz = engine.input(\"move_x\"), engine.input(\"move_z\")\n    if dx == 0 and dz == 0 then return end\n    if (dx ~= 0 and dz ~= 0) or dx % 1 ~= 0 or dz % 1 ~= 0 then\n        message(\"Move one tile along one axis.\")\n        return\n    end\n    local x, y, z = engine.position(player)\n    x, z = x + dx, z + dz\n    for _, wall in ipairs(walls) do\n        if at(wall, x, z) then\n            message(\"A wall blocks the way. Crystals: \" .. collected .. \"/\" .. total)\n            return\n        end\n    end\n    moves = moves + 1\n    engine.set_position(player, x, y, z)\n    for _, trap in ipairs(traps) do\n        if at(trap, x, z) then\n            engine.destroy(player)\n            message(\"Game over! You stepped on a trap after \" .. moves .. \" moves.\")\n            finished = true\n            return\n        end\n    end\n    for index = #crystals, 1, -1 do\n        if at(crystals[index], x, z) then\n            engine.destroy(crystals[index])\n            table.remove(crystals, index)\n            collected = collected + 1\n        end\n    end\n    if x == exit_x and z == exit_z then\n        if #crystals == 0 then\n            local trophy = engine.spawn(\"Trophy\")\n            engine.set_position(trophy, x, y, z)\n            message(\"Victory! Delivered all \" .. total .. \" crystals in \" .. moves .. \" moves.\")\n            finished = true\n        else\n            message(\"Exit locked: \" .. #crystals .. \" crystals remain.\")\n        end\n    else\n        message(\"Crystals: \" .. collected .. \"/\" .. total .. \" | Moves: \" .. moves)\n    end\nend\n"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "name": "Status: Ready"
+      }
+    },
+    {
+      "id": 3,
+      "components": {
+        "name": "Camera",
+        "camera": {},
+        "transform": {
+          "position": [
+            4,
+            12,
+            3
+          ],
+          "rotation": [
+            0.70710678,
+            -0.70710678,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            1,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            2,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            3,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            4,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            5,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 10,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            6,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            7,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 12,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 14,
+      "components": {
+        "name": "Player",
+        "transform": {
+          "position": [
+            1,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 15,
+      "components": {
+        "name": "Crystal",
+        "transform": {
+          "position": [
+            4,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "components": {
+        "name": "Exit",
+        "transform": {
+          "position": [
+            7,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 18,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 19,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            2,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 20,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            3,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 21,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            4,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 22,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            6,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 23,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": 24,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            3
+          ]
+        }
+      }
+    },
+    {
+      "id": 25,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            4,
+            0,
+            3
+          ]
+        }
+      }
+    },
+    {
+      "id": 26,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            3
+          ]
+        }
+      }
+    },
+    {
+      "id": 27,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "id": 28,
+      "components": {
+        "name": "Crystal",
+        "transform": {
+          "position": [
+            2,
+            0,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "id": 29,
+      "components": {
+        "name": "Crystal",
+        "transform": {
+          "position": [
+            6,
+            0,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "id": 30,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "id": 31,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": 32,
+      "components": {
+        "name": "Trap",
+        "transform": {
+          "position": [
+            3,
+            0,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": 33,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": 34,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            0,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 35,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            1,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 36,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            2,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 37,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            3,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 38,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            4,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 39,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            5,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 40,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            6,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 41,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            7,
+            0,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": 42,
+      "components": {
+        "name": "Wall",
+        "transform": {
+          "position": [
+            8,
+            0,
+            6
+          ]
+        }
+      }
+    }
+  ],
+  "prefabs": {
+    "Trophy": {
+      "name": "Trophy"
+    }
+  }
+}

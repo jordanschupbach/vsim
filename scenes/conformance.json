@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "next_id": 3,
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "name": "API conformance",
+        "script": {
+          "source": "-- Every exposed engine function must be exercised by this scene.\nlocal used = {}\nfor name, fn in pairs(engine) do\n    engine[name] = function(...)\n        used[name] = true\n        return fn(...)\n    end\nend\n\nlocal updates = 0\nlocal spawned\n\nfunction on_start(self)\n    assert(io == nil and os == nil and debug == nil and package == nil)\n    assert(loadfile == nil and dofile == nil and print == nil)\n    local temporary = engine.create(\"Temporary\")\n    assert(engine.alive(temporary))\n    assert(engine.name(temporary) == \"Temporary\")\n    assert(engine.input(\"unused_action\") == 0)\n    engine.set(temporary, '{\"name\":\"Temporary camera\",\"camera\":{\"vertical_fov\":70},\"transform\":{\"position\":[1,2,3]}}')\n    assert(string.find(engine.get(temporary), 'Temporary camera', 1, true))\n    engine.set_position(temporary, 4, 5, 6)\n    local x, y, z = engine.position(temporary)\n    assert(x == 4 and y == 5 and z == 6)\n    engine.set(temporary, '{\"name\":\"Physics probe\",\"mesh\":{\"primitive\":\"sphere\"},\"rigid_body\":{\"motion\":\"dynamic\",\"shape\":\"sphere\"},\"transform\":{\"position\":[0,3,0]}}')\n    engine.set_linear_velocity(temporary, 1, 0, 0)\n    local vx, vy, vz = engine.linear_velocity(temporary)\n    assert(vx == 1 and vy == 0 and vz == 0)\n    engine.apply_impulse(temporary, 0, 1, 0)\n    assert(not engine.grounded(temporary))\n    local other = engine.create(\"Other body\")\n    engine.set(other, '{\"rigid_body\":{},\"mesh\":{\"primitive\":\"crystal\"},\"transform\":{\"position\":[10,0,0]}}')\n    assert(not engine.touching(temporary, other))\n    engine.destroy(other)\n    engine.destroy(temporary)\n    assert(not engine.alive(temporary))\n    engine.define_prefab(\"ScriptPrefab\", '{\"name\":\"Spawned from Lua\",\"transform\":{\"scale\":[2,2,2]},\"camera\":{},\"mesh\":{},\"rigid_body\":{}}')\n    spawned = engine.spawn(\"ScriptPrefab\")\n    local found = false\n    for _, id in ipairs(engine.entities()) do\n        if id == spawned then found = true end\n    end\n    assert(found and engine.alive(self))\n    for name, _ in pairs(engine) do\n        assert(used[name], \"conformance is missing API coverage: \" .. name)\n    end\nend\n\nfunction on_update(self, dt)\n    assert(math.abs(dt - 1 / 60) < 0.0000001)\n    updates = updates + 1\n    engine.set_position(self, updates / 60, 0, 0)\n    assert(engine.alive(spawned))\nend\n"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "name": "Camera",
+        "camera": {},
+        "transform": {
+          "position": [
+            0,
+            2,
+            5
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  ],
+  "prefabs": {
+    "CameraPrefab": {
+      "name": "Prefab camera",
+      "camera": {}
+    }
+  }
+}

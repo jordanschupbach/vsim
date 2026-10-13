@@ -1,0 +1,9 @@
+/build/
+/dist/
+/result
+/.cache/
+/.direnv/
+CMakeUserPresets.json
+compile_commands.json
+__pycache__/
+*.pyc

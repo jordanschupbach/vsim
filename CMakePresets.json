@@ -1,0 +1,11 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 25, "patch": 0},
+  "configurePresets": [
+    {"name": "debug", "generator": "Ninja", "binaryDir": "${sourceDir}/build/debug", "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"}},
+    {"name": "asan", "inherits": "debug", "binaryDir": "${sourceDir}/build/asan", "cacheVariables": {"VSIM_SANITIZERS": "ON"}},
+    {"name": "release", "inherits": "debug", "binaryDir": "${sourceDir}/build/release", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "VSIM_BUILD_EDITOR": "OFF"}}
+  ],
+  "buildPresets": [{"name": "debug", "configurePreset": "debug"}, {"name": "asan", "configurePreset": "asan"}, {"name": "release", "configurePreset": "release"}],
+  "testPresets": [{"name": "debug", "configurePreset": "debug", "output": {"outputOnFailure": true}}, {"name": "asan", "configurePreset": "asan", "output": {"outputOnFailure": true}}, {"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}}]
+}
