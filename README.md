@@ -65,6 +65,8 @@ the same pinned revisions and source hashes from `dependencies.json`.
 | `just conformance` | Exercise every exposed Lua API and component |
 | `just generate` | Regenerate embedded scenes after Lua/level edits |
 | `just install [prefix]` | Build/install release runtimes, scenes, and backend notices |
+| `just install-sdk [prefix]` | Build the headless core and install the SDK (headers, static libraries, CMake package, pkg-config) |
+| `just test-sdk` | Run the headless core tests (physics, scenes, Lua, conformance, installation) |
 
 After changing toolchains, run `just rebuild` inside the new shell. CMake caches
 absolute compiler/library paths; mixing Nix environments can cause a
@@ -82,6 +84,25 @@ are labeled `gpu`. Excluding them does not establish renderer correctness.
 The flake pins nixpkgs in `flake.lock`. In an untracked initial checkout, use
 `nix develop path:.` if Git filtering hides new sources. Full Nix package/CI
 execution remains unverified in this restricted session; see [validation](docs/validation.md).
+
+## Using the engine from another project
+
+`just install-sdk` (default prefix `dist/sdk`) installs `include/vsim`,
+`lib/libvsim_core.a`, `lib/libJolt.a`, `lib/cmake/vsim/vsimConfig.cmake`, and
+`lib/pkgconfig/vsim.pc`. A consumer links `vsim::core`, which carries Jolt, GLM,
+nlohmann JSON, and the Lua library the SDK was built with, and compiles as C++20:
+
+```cmake
+find_package(vsim CONFIG REQUIRED PATHS /path/to/dist/sdk)
+target_link_libraries(my_program PRIVATE vsim::core)
+```
+
+`nix build .#core` produces the same prefix without Vulkan, GLFW, or the editor.
+Scenes can define articulated bodies: a `joint` component (hinge or slider, with
+limits and damping) connects an entity's dynamic body to a parent body, and
+`PhysicsWorld` exposes joint coordinates, teleports, and joint forces. This is the
+interface reinforcement-learning environments use; see
+[graphics/physics contracts](docs/graphics-physics.md).
 
 ## Agent editing and runtime separation
 

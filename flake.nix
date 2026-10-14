@@ -9,7 +9,9 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       eachSystem = nixpkgs.lib.genAttrs systems;
-      packageFor = system:
+      # headless = true builds only the engine core (scenes, Lua, Jolt physics)
+      # plus vsim_runtime and installs the SDK; no Vulkan, GLFW, or editor.
+      packageFor = { system, headless ? false }:
         let
           pkgs = import nixpkgs { inherit system; };
           dependencies = builtins.fromJSON (builtins.readFile ./dependencies.json);
@@ -19,7 +21,7 @@
             hash = dependencies.${name}.nix_hash;
           };
         in pkgs.stdenv.mkDerivation {
-          pname = "vsim";
+          pname = if headless then "vsim-core" else "vsim";
           version = "0.1.0";
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
@@ -28,17 +30,26 @@
               in !(builtins.elem name [ "build" "dist" ".git" ".cache" ".direnv" ".agents" ".codex" ".aws" ])
                 && pkgs.lib.cleanSourceFilter path type;
           };
-          nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.python3 pkgs.just pkgs.shaderc ];
-          buildInputs = [ pkgs.glm pkgs.nlohmann_json pkgs.lua5_4 pkgs.glfw pkgs.vulkan-headers pkgs.vulkan-loader ];
+          nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.python3 pkgs.just ]
+            ++ (if headless then [ ] else [ pkgs.shaderc ]);
+          buildInputs = [ pkgs.glm pkgs.nlohmann_json pkgs.lua5_4 ]
+            ++ (if headless then [ ] else [ pkgs.glfw pkgs.vulkan-headers pkgs.vulkan-loader ]);
           cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release"
-            "-DVSIM_NVRHI_SOURCE=${sourceFor "nvrhi" "NVIDIA-RTX" "NVRHI"}"
             "-DVSIM_JOLT_SOURCE=${sourceFor "jolt" "jrouwe" "JoltPhysics"}"
+          ] ++ (if headless then [
+            "-DVSIM_BUILD_3D=OFF" "-DVSIM_BUILD_PLATFORM_PROBE=OFF" "-DVSIM_BUILD_EDITOR=OFF"
+          ] else [
+            "-DVSIM_NVRHI_SOURCE=${sourceFor "nvrhi" "NVIDIA-RTX" "NVRHI"}"
             "-DVSIM_VULKAN_HEADERS_SOURCE=${sourceFor "vulkan_headers" "KhronosGroup" "Vulkan-Headers"}"
             "-DVSIM_IMGUI_SOURCE=${sourceFor "imgui" "ocornut" "imgui"}"
             "-DVSIM_IMGUIZMO_SOURCE=${sourceFor "imguizmo" "CedricGuillemet" "ImGuizmo"}"
-          ];
+          ]);
           doCheck = true;
-          checkPhase = ''
+          checkPhase = if headless then ''
+            runHook preCheck
+            ctest --output-on-failure
+            runHook postCheck
+          '' else ''
             runHook preCheck
             export VK_DRIVER_FILES="$(find ${pkgs.mesa}/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
             export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
@@ -46,15 +57,19 @@
             runHook postCheck
           '';
           # Both runtime executables and game scenes are installed, without editor code.
+          # Every variant also installs the headless SDK (include/, lib/, lib/cmake/vsim, lib/pkgconfig).
         };
     in {
-      packages = eachSystem (system: { default = packageFor system; });
-      checks = eachSystem (system: { core = packageFor system; });
+      packages = eachSystem (system: {
+        default = packageFor { inherit system; };
+        core = packageFor { inherit system; headless = true; };
+      });
+      checks = eachSystem (system: { core = packageFor { inherit system; }; });
       devShells = eachSystem (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            inputsFrom = [ (packageFor system) ];
+            inputsFrom = [ (packageFor { inherit system; }) ];
             packages = [ pkgs.clang-tools pkgs.gdb pkgs.git pkgs.vulkan-tools
               pkgs.vulkan-validation-layers pkgs.glslang pkgs.shaderc pkgs.python3Packages.pyyaml ];
             shellHook = ''

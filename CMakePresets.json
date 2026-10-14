@@ -4,8 +4,9 @@
   "configurePresets": [
     {"name": "debug", "generator": "Ninja", "binaryDir": "${sourceDir}/build/debug", "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"}},
     {"name": "asan", "inherits": "debug", "binaryDir": "${sourceDir}/build/asan", "cacheVariables": {"VSIM_SANITIZERS": "ON"}},
-    {"name": "release", "inherits": "debug", "binaryDir": "${sourceDir}/build/release", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "VSIM_BUILD_EDITOR": "OFF"}}
+    {"name": "release", "inherits": "debug", "binaryDir": "${sourceDir}/build/release", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "VSIM_BUILD_EDITOR": "OFF"}},
+    {"name": "sdk", "inherits": "release", "binaryDir": "${sourceDir}/build/sdk", "cacheVariables": {"VSIM_BUILD_3D": "OFF", "VSIM_BUILD_PLATFORM_PROBE": "OFF", "VSIM_BUILD_EDITOR": "OFF", "CMAKE_INSTALL_LIBDIR": "lib"}}
   ],
-  "buildPresets": [{"name": "debug", "configurePreset": "debug"}, {"name": "asan", "configurePreset": "asan"}, {"name": "release", "configurePreset": "release"}],
-  "testPresets": [{"name": "debug", "configurePreset": "debug", "output": {"outputOnFailure": true}}, {"name": "asan", "configurePreset": "asan", "output": {"outputOnFailure": true}}, {"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}}]
+  "buildPresets": [{"name": "debug", "configurePreset": "debug"}, {"name": "asan", "configurePreset": "asan"}, {"name": "release", "configurePreset": "release"}, {"name": "sdk", "configurePreset": "sdk"}],
+  "testPresets": [{"name": "debug", "configurePreset": "debug", "output": {"outputOnFailure": true}}, {"name": "asan", "configurePreset": "asan", "output": {"outputOnFailure": true}}, {"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}}, {"name": "sdk", "configurePreset": "sdk", "output": {"outputOnFailure": true}}]
 }

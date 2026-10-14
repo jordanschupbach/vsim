@@ -30,6 +30,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(response["result"]["physics"])
         self.assertEqual(response["result"]["physics_backend"], "Jolt")
         self.assertIn("rigid_body", response["result"]["components"])
+        self.assertIn("joint", response["result"]["components"])
+        self.assertIn("joint_state", response["result"]["lua_api"])
         self.assertIn("mesh", response["result"]["components"])
         self.assertIn("apply_impulse", response["result"]["lua_api"])
         self.assertIn("set_rotation", response["result"]["lua_api"])

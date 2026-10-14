@@ -47,16 +47,36 @@ struct Mesh {
 
 struct RigidBody {
     std::string motion{"static"}; // static, dynamic, kinematic
-    std::string shape{"box"};     // box or sphere; dimensions come from transform.scale
+    std::string shape{"box"};     // box, sphere, or capsule; dimensions come from transform.scale
     float mass{1.0F};
     float friction{0.6F};
     float restitution{0.1F};
     float gravity_scale{1.0F};
     bool sensor{false};
-    bool lock_rotation{false};
+    bool lock_rotation{false};            // Shorthand for allowed_rotation = {false, false, false}.
+    glm::bvec3 allowed_translation{true}; // World axes along which a dynamic body may move.
+    glm::bvec3 allowed_rotation{true};    // World axes about which a dynamic body may turn.
     glm::vec3 linear_velocity{0.0F};
+    glm::vec3 angular_velocity{0.0F}; // World space, rad/s.
     void validate() const;
     bool operator==(const RigidBody&) const = default;
+};
+
+// Connects this entity's dynamic rigid body to a parent body (or the world when
+// parent is 0). Anchor and axis are in this entity's rotated frame, in meters,
+// ignoring scale. The joint coordinate is zero at the authored pose; the authored
+// transforms must already satisfy the joint.
+struct Joint {
+    std::string type{"hinge"}; // hinge (rad) or slider (m)
+    EntityId parent{0};
+    glm::vec3 anchor{0.0F};
+    glm::vec3 axis{0.0F, 0.0F, 1.0F};
+    bool limited{false};
+    float limit_min{0.0F}; // limit_min <= 0 <= limit_max; hinges within [-pi, pi]
+    float limit_max{0.0F};
+    float damping{0.0F}; // Viscous torque (N m s) or force (N s) opposing joint velocity.
+    void validate() const;
+    bool operator==(const Joint&) const = default;
 };
 
 struct Entity {
@@ -66,6 +86,7 @@ struct Entity {
     std::optional<Script> script;
     std::optional<Mesh> mesh;
     std::optional<RigidBody> rigid_body;
+    std::optional<Joint> joint;
     void validate() const;
 };
 

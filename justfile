@@ -87,3 +87,12 @@ test-software preset="debug": (build preset)
 # Install a release runtime and its scenes without editor executables.
 install prefix="dist/runtime": (build "release")
     cmake --install build/release --prefix "$1"
+
+# Build the headless engine core and install the SDK: headers, static libraries,
+# the vsim CMake package, and the vsim.pc pkg-config file (no graphics or editor).
+install-sdk prefix="dist/sdk": (build "sdk")
+    cmake --install build/sdk --prefix "$1"
+
+# Test the headless core (physics, scenes, Lua, conformance, installation).
+test-sdk: (build "sdk")
+    ctest --preset sdk

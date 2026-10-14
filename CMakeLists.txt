@@ -10,6 +10,7 @@ option(VSIM_BUILD_PLATFORM_PROBE "Build the GLFW/Vulkan diagnostic" ON)
 option(VSIM_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(VSIM_WARNINGS_AS_ERRORS "Treat project warnings as errors" ON)
 option(VSIM_BUILD_3D "Build the Vulkan/NVRHI graphical game" ON)
+option(VSIM_INSTALL_SDK "Install the headless engine core: headers, static libraries, CMake package, pkg-config" ON)
 
 include(cmake/Dependencies.cmake)
 
@@ -43,11 +44,73 @@ endif()
 
 add_library(vsim_core STATIC src/scene.cpp src/script.cpp src/clock.cpp src/io.cpp src/physics.cpp src/simulation.cpp src/mesh.cpp)
 add_library(vsim::core ALIAS vsim_core)
-set_target_properties(vsim_core PROPERTIES CXX_EXTENSIONS OFF)
-target_include_directories(vsim_core PUBLIC include)
+set_target_properties(vsim_core PROPERTIES CXX_EXTENSIONS OFF EXPORT_NAME core) # Installed as vsim::core, like the alias.
+target_include_directories(vsim_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_include_directories(vsim_core SYSTEM PRIVATE ${LUA_INCLUDE_DIR})
-target_link_libraries(vsim_core PUBLIC glm::glm nlohmann_json::nlohmann_json PRIVATE ${LUA_LIBRARIES} vsim_options Jolt)
+# Warning flags stay in this tree; SDK consumers only inherit the link dependencies.
+target_link_libraries(vsim_core PUBLIC glm::glm nlohmann_json::nlohmann_json PRIVATE ${LUA_LIBRARIES} $<BUILD_INTERFACE:vsim_options> Jolt)
 target_compile_features(vsim_core PUBLIC cxx_std_20)
+
+if(VSIM_INSTALL_SDK)
+  # Headless SDK: `find_package(vsim CONFIG)` gives vsim::core (with vsim::Jolt, glm,
+  # nlohmann_json, and Lua as link dependencies); `pkg-config vsim` gives the same flags.
+  include(CMakePackageConfigHelpers)
+  install(TARGETS vsim_core Jolt EXPORT vsimTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(DIRECTORY include/vsim DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(EXPORT vsimTargets NAMESPACE vsim:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vsim)
+  # glm keeps its include directory on glm::glm-header-only and links a small static library.
+  set(VSIM_GLM_INCLUDE_DIRS "")
+  foreach(candidate IN ITEMS glm::glm-header-only glm::glm)
+    if(TARGET ${candidate})
+      get_target_property(candidate_dirs ${candidate} INTERFACE_INCLUDE_DIRECTORIES)
+      if(candidate_dirs)
+        list(APPEND VSIM_GLM_INCLUDE_DIRS ${candidate_dirs})
+      endif()
+    endif()
+  endforeach()
+  set(VSIM_GLM_LIBRARY "")
+  get_target_property(glm_type glm::glm TYPE)
+  if(NOT glm_type STREQUAL "INTERFACE_LIBRARY")
+    foreach(property IN ITEMS IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_NOCONFIG IMPORTED_LOCATION)
+      get_target_property(glm_location glm::glm ${property})
+      if(glm_location AND NOT VSIM_GLM_LIBRARY)
+        set(VSIM_GLM_LIBRARY "${glm_location}")
+      endif()
+    endforeach()
+  endif()
+  get_target_property(VSIM_JSON_INCLUDE_DIRS nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+  list(REMOVE_DUPLICATES VSIM_GLM_INCLUDE_DIRS)
+  list(REMOVE_DUPLICATES VSIM_JSON_INCLUDE_DIRS)
+  set(VSIM_LUA_LIBRARIES "${LUA_LIBRARIES}")
+  configure_package_config_file(cmake/vsimConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/vsimConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vsim
+    PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR)
+  write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/vsimConfigVersion.cmake" COMPATIBILITY SameMajorVersion)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/vsimConfig.cmake" "${CMAKE_CURRENT_BINARY_DIR}/vsimConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vsim)
+  set(VSIM_PC_INCLUDES "")
+  foreach(dir IN LISTS VSIM_GLM_INCLUDE_DIRS VSIM_JSON_INCLUDE_DIRS)
+    string(APPEND VSIM_PC_INCLUDES " -I${dir}")
+  endforeach()
+  set(VSIM_PC_LUA "")
+  if(VSIM_GLM_LIBRARY)
+    string(APPEND VSIM_PC_LUA " ${VSIM_GLM_LIBRARY}")
+  endif()
+  foreach(library IN LISTS VSIM_LUA_LIBRARIES)
+    if(IS_ABSOLUTE "${library}")
+      get_filename_component(library_dir "${library}" DIRECTORY)
+      string(APPEND VSIM_PC_LUA " ${library} -Wl,-rpath,${library_dir}")
+    else()
+      string(APPEND VSIM_PC_LUA " -l${library}")
+    endif()
+  endforeach()
+  configure_file(cmake/vsim.pc.in "${CMAKE_CURRENT_BINARY_DIR}/vsim.pc" @ONLY)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/vsim.pc" DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()
 
 add_executable(vsim_runtime apps/runtime.cpp)
 target_link_libraries(vsim_runtime PRIVATE vsim_core vsim_options)

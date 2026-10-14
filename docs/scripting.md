@@ -34,9 +34,14 @@ while another engine API call is producing return values.
 | `engine.set_rotation(id, w, x, y, z)` | Set a finite unit quaternion in w/x/y/z order; retain other components; invalid rotations leave the entity unchanged |
 | `engine.linear_velocity(id)` | Read rigid-body velocity as x, y, z in m/s |
 | `engine.set_linear_velocity(id, x, y, z)` | Set a dynamic/kinematic body's velocity; static bodies reject it |
+| `engine.angular_velocity(id)` | Read rigid-body angular velocity as x, y, z in rad/s (world space) |
+| `engine.set_angular_velocity(id, x, y, z)` | Set a dynamic/kinematic body's angular velocity; static bodies reject it |
 | `engine.apply_impulse(id, x, y, z)` | Apply a world-space linear impulse in N s to a dynamic body |
 | `engine.touching(a, b)` | Test shape overlap/proximity within 0.02 m, including sensors and sleeping bodies |
 | `engine.grounded(id)` | Downward center probe to 0.08 m below the body's bounds; solid surface normal Y must exceed 0.6 |
+| `engine.joint_state(id)` | Return the joint coordinate (rad or m) and its rate (rad/s or m/s) of the entity's joint |
+| `engine.set_joint_state(id, position, rate)` | Teleport the joint and the bodies below it to a coordinate within its limits and set its rate |
+| `engine.apply_joint_force(id, value)` | Apply a torque (N m, hinge) or force (N, slider) along the joint axis for the next step; finite, within +/-100000 |
 | `engine.define_prefab(name, json)` | Define/replace a component template |
 | `engine.spawn(name)` | Create independent copy of a prefab and return ID |
 
@@ -104,16 +109,22 @@ The runtime, graphical game, and editor all use `Simulation`. Deltas must be in
 edits immediately, including spawned/destroyed bodies. Queries observe the state
 before the current tick's final physics step.
 
-All five physics APIs require a valid entity with a rigid body. Impulses require
-a dynamic body, finite components within +/-100000 N s, and a resulting speed
-no greater than 500 m/s. Body velocity components must be within +/-500 m/s;
-Jolt clamps integrated speed to 500 m/s. Invalid values raise a script error.
+All physics APIs require a valid entity with a rigid body, and the joint APIs an
+entity with a joint. Impulses require a dynamic body, finite components within
++/-100000 N s, and a resulting speed no greater than 500 m/s. Linear velocity
+components must be within +/-500 m/s and angular ones within +/-100 rad/s; Jolt
+clamps integrated speeds to the same bounds. Invalid values raise a script error.
+Joint coordinates are measured from the authored pose; see the joint contract in
+[graphics/physics contracts](graphics-physics.md). `set_joint_state` validates the
+new poses of the whole subtree before moving anything. `apply_joint_force` acts
+on the child and, when the parent is dynamic, oppositely on the parent.
 `grounded` is a center ray probe suitable for this sphere-controlled example,
 not a general character controller or a collision-event callback. Sensors do
 not count as ground. Contact queries support sleeping bodies.
 
-Changing collision shape, scale, or body configuration rebuilds the native body;
-position/rotation edits teleport it. Only transform and linear velocity are
-serialized. Native angular velocity, sleep state, contacts, and Lua locals are
+Changing collision shape, scale, or body configuration rebuilds the native body
+and the joints attached to it; position/rotation edits teleport it. Transform,
+linear velocity, and angular velocity are serialized. Native sleep state,
+contacts, accumulated constraint impulses, joint zero poses, and Lua locals are
 not save-game data. Editor simulation/undo reconstructs native worlds from scene
 snapshots. See [graphics/physics contracts](graphics-physics.md).

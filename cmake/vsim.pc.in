@@ -1,0 +1,10 @@
+# VSim headless engine core (scenes, Lua behavior, Jolt physics), relocatable.
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: vsim
+Description: VSim engine core: scenes, Lua behavior, and Jolt physics without graphics
+Version: @PROJECT_VERSION@
+Cflags: -std=c++20 -I${includedir}@VSIM_PC_INCLUDES@
+Libs: -L${libdir} -lvsim_core -lJolt@VSIM_PC_LUA@

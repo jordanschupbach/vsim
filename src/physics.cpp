@@ -8,21 +8,30 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/SimShapeFilter.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <vsim/physics.hpp>
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
+#include <set>
 #include <stdexcept>
+#include <vector>
 
 namespace vsim {
 namespace {
@@ -61,6 +70,9 @@ JPH::Quat jquat(glm::quat q) {
     // Serialized rotations allow rounding error; Jolt requires a tighter unit norm.
     q = glm::normalize(q);
     return {q.x, q.y, q.z, q.w};
+}
+glm::quat gquat(JPH::Quat q) {
+    return {q.GetW(), q.GetX(), q.GetY(), q.GetZ()};
 }
 
 class Layers final : public JPH::BroadPhaseLayerInterface,
@@ -101,7 +113,35 @@ class GroundFilter final : public JPH::IgnoreSingleBodyFilter {
 
 bool same_config(RigidBody a, const RigidBody& b) {
     a.linear_velocity = b.linear_velocity;
+    a.angular_velocity = b.angular_velocity;
     return a == b;
+}
+
+JPH::EAllowedDOFs allowed_dofs(const RigidBody& body) {
+    auto dofs = JPH::EAllowedDOFs::None;
+    const std::array<JPH::EAllowedDOFs, 3> translation = {JPH::EAllowedDOFs::TranslationX,
+                                                          JPH::EAllowedDOFs::TranslationY,
+                                                          JPH::EAllowedDOFs::TranslationZ};
+    const std::array<JPH::EAllowedDOFs, 3> rotation = {
+        JPH::EAllowedDOFs::RotationX, JPH::EAllowedDOFs::RotationY, JPH::EAllowedDOFs::RotationZ};
+    for (int axis = 0; axis < 3; ++axis) {
+        if (body.allowed_translation[axis])
+            dofs |= translation[static_cast<std::size_t>(axis)];
+        if (body.allowed_rotation[axis] && !body.lock_rotation)
+            dofs |= rotation[static_cast<std::size_t>(axis)];
+    }
+    return dofs;
+}
+
+// World-space joint frame derived from the child's current transform.
+struct JointFrame {
+    glm::vec3 anchor;
+    glm::vec3 axis;
+};
+JointFrame joint_frame(const Entity& entity) {
+    const auto rotation = glm::normalize(entity.transform.rotation);
+    return {entity.transform.position + rotation * entity.joint->anchor,
+            glm::normalize(rotation * entity.joint->axis)};
 }
 } // namespace
 
@@ -110,6 +150,13 @@ struct PhysicsWorld::Impl {
         JPH::BodyID id;
         Transform transform;
         RigidBody component;
+        bool grouped{false};
+    };
+    struct NativeJoint {
+        JPH::Ref<JPH::TwoBodyConstraint> constraint;
+        Joint component;
+        JPH::BodyID child;
+        JPH::BodyID parent; // Invalid when attached to the world.
     };
     Scene& scene;
     Layers layers;
@@ -118,6 +165,9 @@ struct PhysicsWorld::Impl {
     JPH::TempAllocatorImplWithMallocFallback allocator{8 * 1024 * 1024};
     JPH::JobSystemSingleThreaded jobs{JPH::cMaxPhysicsJobs};
     std::map<EntityId, Body> bodies;
+    std::map<EntityId, NativeJoint> joints;
+    std::vector<JPH::Ref<JPH::GroupFilterTable>> filters;
+    bool joints_changed{false};
 
     explicit Impl(Scene& source) : scene(source) {
         system.Init(static_cast<JPH::uint>(Scene::max_entities + 1), 0, 65536, 20000, layers,
@@ -128,6 +178,11 @@ struct PhysicsWorld::Impl {
         system.SetSimShapeFilter(&shape_filter);
     }
     ~Impl() {
+        for (auto& [id, joint] : joints) {
+            (void)id;
+            system.RemoveConstraint(joint.constraint);
+        }
+        joints.clear();
         for (const auto& [id, body] : bodies) {
             (void)id;
             system.GetBodyInterface().RemoveBody(body.id);
@@ -140,6 +195,9 @@ struct PhysicsWorld::Impl {
         JPH::RefConst<JPH::Shape> shape;
         if (component.shape == "sphere") {
             shape = new JPH::SphereShape(transform.scale.x * 0.5F);
+        } else if (component.shape == "capsule") {
+            const float radius = transform.scale.x * 0.5F;
+            shape = new JPH::CapsuleShape(transform.scale.y * 0.5F - radius, radius);
         } else {
             const auto half = transform.scale * 0.5F;
             shape = new JPH::BoxShape(
@@ -157,27 +215,230 @@ struct PhysicsWorld::Impl {
         settings.mRestitution = component.restitution;
         settings.mGravityFactor = component.gravity_scale;
         settings.mLinearVelocity = jvec(component.linear_velocity);
+        settings.mAngularVelocity = jvec(component.angular_velocity);
         settings.mMaxLinearVelocity = 500.0F;
+        settings.mMaxAngularVelocity = 100.0F;
         settings.mMotionQuality = motion == JPH::EMotionType::Dynamic && !component.sensor
                                       ? JPH::EMotionQuality::LinearCast
                                       : JPH::EMotionQuality::Discrete;
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = component.mass;
-        if (component.lock_rotation)
-            settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX |
-                                    JPH::EAllowedDOFs::TranslationY |
-                                    JPH::EAllowedDOFs::TranslationZ;
+        if (motion == JPH::EMotionType::Dynamic)
+            settings.mAllowedDOFs = allowed_dofs(component);
         auto& interface = system.GetBodyInterface();
         const auto body = interface.CreateAndAddBody(settings, motion == JPH::EMotionType::Static
                                                                    ? JPH::EActivation::DontActivate
                                                                    : JPH::EActivation::Activate);
         if (body.IsInvalid())
             throw std::runtime_error("Jolt body capacity exhausted");
-        return {body, transform, component};
+        return {body, transform, component, false};
     }
     void remove(JPH::BodyID body) {
         system.GetBodyInterface().RemoveBody(body);
         system.GetBodyInterface().DestroyBody(body);
+    }
+    void remove_joints_touching(JPH::BodyID body) {
+        std::erase_if(joints, [&](auto& item) {
+            if (item.second.child != body && item.second.parent != body)
+                return false;
+            system.RemoveConstraint(item.second.constraint);
+            joints_changed = true;
+            return true;
+        });
+    }
+    JPH::BodyID parent_body(const Joint& joint) const {
+        return joint.parent == 0 ? JPH::BodyID() : bodies.at(joint.parent).id;
+    }
+    void validate_joint(EntityId id, const Entity& entity) const {
+        const auto parent = entity.joint->parent;
+        if (parent != 0 &&
+            (parent == id || !scene.alive(parent) || !scene.get(parent).rigid_body)) {
+            throw std::invalid_argument("joint parent must be another entity with a rigid body");
+        }
+        auto current = parent;
+        for (std::size_t depth = 0; current != 0; ++depth) {
+            if (current == id || depth > scene.size())
+                throw std::invalid_argument("joint chain forms a cycle");
+            const auto& link = scene.get(current);
+            current = link.joint ? link.joint->parent : 0;
+        }
+    }
+    NativeJoint create_joint(EntityId id, const Entity& entity) {
+        const auto& joint = *entity.joint;
+        const auto frame = joint_frame(entity);
+        const auto reference =
+            std::abs(frame.axis.x) < 0.9F ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        const auto normal = glm::normalize(glm::cross(frame.axis, reference));
+        const auto child = bodies.at(id).id;
+        const auto parent = parent_body(joint);
+        const auto& lock = system.GetBodyLockInterfaceNoLock();
+        auto* child_body = lock.TryGetBody(child);
+        auto* parent_body =
+            parent.IsInvalid() ? &JPH::Body::sFixedToWorld : lock.TryGetBody(parent);
+        if (!child_body || !parent_body)
+            throw std::runtime_error("joint bodies are not available");
+        JPH::Ref<JPH::TwoBodyConstraint> constraint;
+        if (joint.type == "hinge") {
+            JPH::HingeConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = settings.mPoint2 = jvec(frame.anchor);
+            settings.mHingeAxis1 = settings.mHingeAxis2 = jvec(frame.axis);
+            settings.mNormalAxis1 = settings.mNormalAxis2 = jvec(normal);
+            if (joint.limited) {
+                settings.mLimitsMin = joint.limit_min;
+                settings.mLimitsMax = joint.limit_max;
+            }
+            constraint = settings.Create(*parent_body, *child_body);
+        } else {
+            JPH::SliderConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = true;
+            settings.SetSliderAxis(jvec(frame.axis));
+            if (joint.limited) {
+                settings.mLimitsMin = joint.limit_min;
+                settings.mLimitsMax = joint.limit_max;
+            }
+            constraint = settings.Create(*parent_body, *child_body);
+        }
+        system.AddConstraint(constraint);
+        joints_changed = true;
+        return {constraint, joint, child, parent};
+    }
+    // Bodies connected by a joint never collide with each other.
+    void rebuild_groups() {
+        std::map<EntityId, EntityId> parent_of;
+        auto find = [&](EntityId id) {
+            while (parent_of.contains(id) && parent_of.at(id) != id)
+                id = parent_of.at(id);
+            return id;
+        };
+        for (const auto& [id, joint] : joints) {
+            if (joint.component.parent == 0)
+                continue;
+            parent_of.try_emplace(id, id);
+            parent_of.try_emplace(joint.component.parent, joint.component.parent);
+            parent_of[find(id)] = find(joint.component.parent);
+        }
+        std::map<EntityId, std::vector<EntityId>> components;
+        for (const auto& [id, link] : parent_of) {
+            (void)link;
+            components[find(id)].push_back(id);
+        }
+        filters.clear();
+        struct Assignment {
+            JPH::GroupFilterTable* table;
+            JPH::CollisionGroup::GroupID group;
+            JPH::CollisionGroup::SubGroupID sub;
+        };
+        std::map<EntityId, Assignment> assignments;
+        JPH::CollisionGroup::GroupID group = 0;
+        for (const auto& [root, members] : components) {
+            (void)root;
+            JPH::Ref<JPH::GroupFilterTable> table =
+                new JPH::GroupFilterTable(static_cast<JPH::uint>(members.size()));
+            for (std::size_t i = 0; i < members.size(); ++i)
+                assignments[members[i]] = {table.GetPtr(), group,
+                                           static_cast<JPH::CollisionGroup::SubGroupID>(i)};
+            for (const auto member : members) {
+                const auto found = joints.find(member);
+                if (found != joints.end() && found->second.component.parent != 0)
+                    table->DisableCollision(assignments.at(member).sub,
+                                            assignments.at(found->second.component.parent).sub);
+            }
+            filters.push_back(table);
+            ++group;
+        }
+        auto& interface = system.GetBodyInterface();
+        for (auto& [id, body] : bodies) {
+            const auto found = assignments.find(id);
+            if (found != assignments.end()) {
+                const auto& a = found->second;
+                interface.SetCollisionGroup(body.id, JPH::CollisionGroup(a.table, a.group, a.sub));
+                body.grouped = true;
+            } else if (body.grouped) {
+                interface.SetCollisionGroup(body.id, JPH::CollisionGroup());
+                body.grouped = false;
+            } else {
+                continue;
+            }
+            // Sleeping bodies would otherwise keep ignoring (or overlapping) each other.
+            if (body.component.motion != "static")
+                interface.ActivateBody(body.id);
+        }
+        joints_changed = false;
+    }
+    // The entity and every body whose joint chain leads to it.
+    std::vector<EntityId> subtree(EntityId root) const {
+        std::set<EntityId> members{root};
+        for (bool grown = true; grown;) {
+            grown = false;
+            for (const auto& [id, joint] : joints) {
+                if (!members.contains(id) && members.contains(joint.component.parent)) {
+                    members.insert(id);
+                    grown = true;
+                }
+            }
+        }
+        return {members.begin(), members.end()};
+    }
+    const NativeJoint& joint_of(EntityId id) const {
+        const auto found = joints.find(id);
+        if (found == joints.end())
+            throw std::invalid_argument("entity has no joint");
+        return found->second;
+    }
+    JointState state(const NativeJoint& joint) const {
+        const auto& interface = system.GetBodyInterface();
+        const auto axis =
+            glm::normalize(gquat(interface.GetRotation(joint.child)) * joint.component.axis);
+        const auto child_position = gvec(interface.GetPosition(joint.child));
+        glm::vec3 parent_angular(0), parent_linear(0);
+        if (!joint.parent.IsInvalid()) {
+            parent_angular = gvec(interface.GetAngularVelocity(joint.parent));
+            parent_linear = gvec(interface.GetLinearVelocity(joint.parent)) +
+                            glm::cross(parent_angular,
+                                       child_position - gvec(interface.GetPosition(joint.parent)));
+        }
+        JointState result;
+        if (joint.component.type == "hinge") {
+            result.position = static_cast<const JPH::HingeConstraint*>(joint.constraint.GetPtr())
+                                  ->GetCurrentAngle();
+            result.velocity =
+                glm::dot(gvec(interface.GetAngularVelocity(joint.child)) - parent_angular, axis);
+        } else {
+            result.position = static_cast<const JPH::SliderConstraint*>(joint.constraint.GetPtr())
+                                  ->GetCurrentPosition();
+            result.velocity =
+                glm::dot(gvec(interface.GetLinearVelocity(joint.child)) - parent_linear, axis);
+        }
+        return result;
+    }
+    void add_joint_force(EntityId id, const NativeJoint& joint, float value) {
+        const auto axis = joint_frame(scene.get(id)).axis * value;
+        auto& interface = system.GetBodyInterface();
+        const bool parent_dynamic =
+            joint.component.parent != 0 &&
+            scene.get(joint.component.parent).rigid_body->motion == "dynamic";
+        if (joint.component.type == "hinge") {
+            interface.AddTorque(joint.child, jvec(axis));
+            if (parent_dynamic)
+                interface.AddTorque(joint.parent, jvec(-axis));
+        } else {
+            interface.AddForce(joint.child, jvec(axis));
+            if (parent_dynamic)
+                interface.AddForce(joint.parent, jvec(-axis));
+        }
+    }
+    void store(EntityId id, Body& body) {
+        const auto& interface = system.GetBodyInterface();
+        auto entity = scene.get(id);
+        entity.transform.position = gvec(interface.GetPosition(body.id));
+        entity.transform.rotation = gquat(interface.GetRotation(body.id));
+        entity.rigid_body->linear_velocity = gvec(interface.GetLinearVelocity(body.id));
+        entity.rigid_body->angular_velocity = gvec(interface.GetAngularVelocity(body.id));
+        scene.set(id, entity);
+        body.transform = entity.transform;
+        body.component = *entity.rigid_body;
     }
 };
 
@@ -194,6 +455,7 @@ void PhysicsWorld::sync() {
     std::erase_if(world.bodies, [&](const auto& item) {
         if (world.scene.alive(item.first) && world.scene.get(item.first).rigid_body)
             return false;
+        world.remove_joints_touching(item.second.id);
         world.remove(item.second.id);
         return true;
     });
@@ -215,6 +477,7 @@ void PhysicsWorld::sync() {
         auto& body = found->second;
         if (!same_config(body.component, *entity.rigid_body) ||
             body.transform.scale != entity.transform.scale) {
+            world.remove_joints_touching(body.id);
             auto replacement = world.create(id, entity);
             world.remove(body.id);
             body = replacement;
@@ -228,9 +491,37 @@ void PhysicsWorld::sync() {
         }
         if (body.component.linear_velocity != entity.rigid_body->linear_velocity)
             interface.SetLinearVelocity(body.id, jvec(entity.rigid_body->linear_velocity));
+        if (body.component.angular_velocity != entity.rigid_body->angular_velocity)
+            interface.SetAngularVelocity(body.id, jvec(entity.rigid_body->angular_velocity));
         body.transform = entity.transform;
         body.component = *entity.rigid_body;
     }
+    std::erase_if(world.joints, [&](const auto& item) {
+        const auto id = item.first;
+        bool keep = world.scene.alive(id) && world.scene.get(id).joint && world.bodies.contains(id);
+        if (keep) {
+            const auto& component = *world.scene.get(id).joint;
+            const auto parent = component.parent == 0 || !world.bodies.contains(component.parent)
+                                    ? JPH::BodyID()
+                                    : world.bodies.at(component.parent).id;
+            keep = item.second.component == component &&
+                   item.second.child == world.bodies.at(id).id && item.second.parent == parent;
+        }
+        if (!keep) {
+            world.system.RemoveConstraint(item.second.constraint);
+            world.joints_changed = true;
+        }
+        return !keep;
+    });
+    for (const auto id : world.scene.entities()) {
+        const auto& entity = world.scene.get(id);
+        if (!entity.joint || world.joints.contains(id))
+            continue;
+        world.validate_joint(id, entity);
+        world.joints.emplace(id, world.create_joint(id, entity));
+    }
+    if (world.joints_changed)
+        world.rebuild_groups();
 }
 
 void PhysicsWorld::step(double delta) {
@@ -238,22 +529,17 @@ void PhysicsWorld::step(double delta) {
         throw std::invalid_argument("physics delta must be in (0, 1/30] seconds");
     sync();
     auto& world = *impl_;
+    for (const auto& [id, joint] : world.joints) {
+        if (joint.component.damping > 0)
+            world.add_joint_force(id, joint,
+                                  -joint.component.damping * world.state(joint).velocity);
+    }
     const auto result =
         world.system.Update(static_cast<float>(delta), 1, &world.allocator, &world.jobs);
     if (result != JPH::EPhysicsUpdateError::None)
         throw std::runtime_error("Jolt exceeded its collision capacity");
-    const auto& interface = world.system.GetBodyInterface();
-    for (auto& [id, body] : world.bodies) {
-        auto entity = world.scene.get(id);
-        entity.transform.position = gvec(interface.GetPosition(body.id));
-        const auto rotation = interface.GetRotation(body.id);
-        entity.transform.rotation = {rotation.GetW(), rotation.GetX(), rotation.GetY(),
-                                     rotation.GetZ()};
-        entity.rigid_body->linear_velocity = gvec(interface.GetLinearVelocity(body.id));
-        world.scene.set(id, entity);
-        body.transform = entity.transform;
-        body.component = *entity.rigid_body;
-    }
+    for (auto& [id, body] : world.bodies)
+        world.store(id, body);
 }
 
 void PhysicsWorld::apply_impulse(EntityId id, glm::vec3 impulse) {
@@ -274,6 +560,76 @@ void PhysicsWorld::apply_impulse(EntityId id, glm::vec3 impulse) {
         gvec(impl_->system.GetBodyInterface().GetLinearVelocity(body));
     impl_->scene.set(id, changed);
     impl_->bodies.at(id).component = *changed.rigid_body;
+}
+
+JointState PhysicsWorld::joint_state(EntityId id) {
+    sync();
+    return impl_->state(impl_->joint_of(id));
+}
+
+void PhysicsWorld::set_joint_state(EntityId id, float position, float velocity) {
+    if (!std::isfinite(position) || !std::isfinite(velocity))
+        throw std::invalid_argument("joint state must be finite");
+    sync();
+    auto& world = *impl_;
+    const auto& joint = world.joint_of(id);
+    const auto& component = joint.component;
+    if (component.limited && (position < component.limit_min || position > component.limit_max))
+        throw std::invalid_argument("joint position is outside its limits");
+    const auto current = world.state(joint);
+    const float delta_position = position - current.position;
+    const float delta_velocity = velocity - current.velocity;
+    const auto frame = joint_frame(world.scene.get(id));
+    const bool hinge = component.type == "hinge";
+    const auto rotation = glm::angleAxis(delta_position, frame.axis);
+    const auto& interface = world.system.GetBodyInterface();
+    // Compute and validate every new pose before touching any body.
+    struct Move {
+        EntityId id;
+        Entity entity;
+    };
+    std::vector<Move> moves;
+    for (const auto member : world.subtree(id)) {
+        const auto body = world.bodies.at(member).id;
+        auto entity = world.scene.get(member);
+        auto p = gvec(interface.GetPosition(body));
+        auto q = gquat(interface.GetRotation(body));
+        auto v = gvec(interface.GetLinearVelocity(body));
+        auto w = gvec(interface.GetAngularVelocity(body));
+        if (hinge) {
+            p = frame.anchor + rotation * (p - frame.anchor);
+            q = glm::normalize(rotation * q);
+            w += frame.axis * delta_velocity;
+            v += glm::cross(frame.axis * delta_velocity, p - frame.anchor);
+        } else {
+            p += frame.axis * delta_position;
+            v += frame.axis * delta_velocity;
+        }
+        entity.transform.position = p;
+        entity.transform.rotation = q;
+        entity.rigid_body->linear_velocity = v;
+        entity.rigid_body->angular_velocity = w;
+        entity.validate();
+        moves.push_back({member, std::move(entity)});
+    }
+    auto& mutable_interface = world.system.GetBodyInterface();
+    for (const auto& move : moves) {
+        auto& body = world.bodies.at(move.id);
+        const auto& t = move.entity.transform;
+        const auto& b = *move.entity.rigid_body;
+        mutable_interface.SetPositionAndRotation(body.id, jvec(t.position), jquat(t.rotation),
+                                                 JPH::EActivation::Activate);
+        mutable_interface.SetLinearAndAngularVelocity(body.id, jvec(b.linear_velocity),
+                                                      jvec(b.angular_velocity));
+        world.store(move.id, body);
+    }
+}
+
+void PhysicsWorld::apply_joint_force(EntityId id, float value) {
+    if (!std::isfinite(value) || std::abs(value) > 100000.0F)
+        throw std::invalid_argument("joint force must be finite and within +/-100000");
+    sync();
+    impl_->add_joint_force(id, impl_->joint_of(id), value);
 }
 
 bool PhysicsWorld::touching(EntityId first, EntityId second) {
@@ -318,5 +674,9 @@ bool PhysicsWorld::grounded(EntityId id) {
 
 std::size_t PhysicsWorld::body_count() const {
     return impl_->bodies.size();
+}
+
+std::size_t PhysicsWorld::joint_count() const {
+    return impl_->joints.size();
 }
 } // namespace vsim

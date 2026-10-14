@@ -388,7 +388,7 @@ int main() {
             scripts.tick(1.0 / 60.0);
         near(scene.get(1).transform.position.x, 2.0);
         CHECK(scene.size() == 3);
-        CHECK(scene.get(5).camera.has_value());
+        CHECK(scene.get(7).camera.has_value()); // Spawned after the temporary joint bodies.
     });
     test("Lua start once and persistent local state", [] {
         Scene scene;

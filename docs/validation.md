@@ -371,3 +371,23 @@ ASan/UBSan 15/15 (the documented local `detect_leaks=0` limitation), and runtime
 release 10/10. An offscreen editor capture after 900 simulation ticks showed the
 expected quarter-orbit view with zero Vulkan validation errors; the image was
 visually inspected at `build/debug/camera-orbit-15s.png`.
+
+## 2026-10-13: joints, capsules, axis locks, angular velocity, headless SDK
+
+Checked with GCC 14.3.0 in the Nix dev shell on the NixOS host. `scripts/check.sh
+debug`: 15/15 tests pass, including the GPU suites on the host's NVIDIA Vulkan
+driver. `scripts/check.sh release`: 10/10. `ctest --preset sdk` (headless core,
+editor and 3D off): 8/8, and `cmake --install build/sdk` produces `include/vsim`,
+`lib/libvsim_core.a`, `lib/libJolt.a`, `lib/cmake/vsim`, `lib/pkgconfig/vsim.pc`.
+`scripts/check.sh asan`: the 10 headless tests pass; the five GPU-labelled tests
+fail on the NVIDIA driver only with LeakSanitizer reports of 624 bytes in three
+allocations inside driver threads, and all five pass under Mesa llvmpipe
+(`VK_DRIVER_FILES=$VSIM_SOFTWARE_VULKAN_ICD ctest --preset asan -L gpu`), so the
+leak is in the proprietary driver, not the engine. The new physics tests cover
+capsule rest poses, planar axis locks, hinge sign and limits, slider coordinates
+and limits, joint torques with parent reaction, joint-pair collision exclusion,
+reference validation (missing parent, cycle, parent without body, parent destroyed
+later), chain teleports, reload of jointed scenes, and the Lua joint bindings.
+`nix build .#core` and `nix flake check` were not run in this session (store
+space and network were limited); the headless package definition mirrors the
+tested CMake preset.

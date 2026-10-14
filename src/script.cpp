@@ -183,6 +183,45 @@ int set_linear_velocity(lua_State* state) {
     return 0;
 }
 
+int angular_velocity(lua_State* state) {
+    const auto& entity = context(state).scene->get(id_arg(state, 1));
+    if (!entity.rigid_body)
+        throw std::invalid_argument("entity has no rigid body");
+    const auto velocity = entity.rigid_body->angular_velocity;
+    lua_pushnumber(state, velocity.x);
+    lua_pushnumber(state, velocity.y);
+    lua_pushnumber(state, velocity.z);
+    return 3;
+}
+
+int set_angular_velocity(lua_State* state) {
+    const auto id = id_arg(state, 1);
+    auto entity = context(state).scene->get(id);
+    if (!entity.rigid_body || entity.rigid_body->motion == "static")
+        throw std::invalid_argument("velocity requires a dynamic or kinematic rigid body");
+    entity.rigid_body->angular_velocity = {float_arg(state, 2), float_arg(state, 3),
+                                           float_arg(state, 4)};
+    context(state).scene->set(id, std::move(entity));
+    return 0;
+}
+
+int joint_state(lua_State* state) {
+    const auto result = physics(state).joint_state(id_arg(state, 1));
+    lua_pushnumber(state, result.position);
+    lua_pushnumber(state, result.velocity);
+    return 2;
+}
+
+int set_joint_state(lua_State* state) {
+    physics(state).set_joint_state(id_arg(state, 1), float_arg(state, 2), float_arg(state, 3));
+    return 0;
+}
+
+int apply_joint_force(lua_State* state) {
+    physics(state).apply_joint_force(id_arg(state, 1), float_arg(state, 2));
+    return 0;
+}
+
 int apply_impulse(lua_State* state) {
     physics(state).apply_impulse(id_arg(state, 1),
                                  {float_arg(state, 2), float_arg(state, 3), float_arg(state, 4)});
@@ -238,9 +277,14 @@ const luaL_Reg bindings[] = {{"create", boundary<create>},
                              {"define_prefab", boundary<define_prefab>},
                              {"linear_velocity", boundary<linear_velocity>},
                              {"set_linear_velocity", boundary<set_linear_velocity>},
+                             {"angular_velocity", boundary<angular_velocity>},
+                             {"set_angular_velocity", boundary<set_angular_velocity>},
                              {"apply_impulse", boundary<apply_impulse>},
                              {"touching", boundary<touching>},
                              {"grounded", boundary<grounded>},
+                             {"joint_state", boundary<joint_state>},
+                             {"set_joint_state", boundary<set_joint_state>},
+                             {"apply_joint_force", boundary<apply_joint_force>},
                              {nullptr, nullptr}};
 
 void instruction_hook(lua_State* state, lua_Debug*) {

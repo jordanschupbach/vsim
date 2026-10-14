@@ -1,6 +1,7 @@
 #include <vsim/scene.hpp>
 
 #include <glm/ext/matrix_clip_space.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -58,6 +59,25 @@ glm::vec3 vec3(const Json& data) {
         }
     }
     return {number(data[0]), number(data[1]), number(data[2])};
+}
+
+glm::bvec3 bvec3(const Json& data) {
+    if (!data.is_array() || data.size() != 3) {
+        throw std::invalid_argument("expected three booleans");
+    }
+    for (const auto& value : data) {
+        if (!value.is_boolean()) {
+            throw std::invalid_argument("axis flags must be booleans");
+        }
+    }
+    return {data[0].get<bool>(), data[1].get<bool>(), data[2].get<bool>()};
+}
+
+Json json(glm::vec3 v) {
+    return {v.x, v.y, v.z};
+}
+Json json(glm::bvec3 v) {
+    return {v.x, v.y, v.z};
 }
 } // namespace
 
@@ -153,6 +173,30 @@ void Entity::validate() const {
              std::abs(transform.scale.x - transform.scale.z) > 0.00001F)) {
             throw std::invalid_argument("sphere colliders require uniform scale");
         }
+        if (rigid_body->shape == "capsule" &&
+            (std::abs(transform.scale.x - transform.scale.z) > 0.00001F ||
+             transform.scale.y <= transform.scale.x)) {
+            throw std::invalid_argument(
+                "capsule colliders require equal x/z scale (diameter) and a longer y scale");
+        }
+    }
+    if (joint) {
+        joint->validate();
+        if (!rigid_body || rigid_body->motion != "dynamic") {
+            throw std::invalid_argument("joints require a dynamic rigid body");
+        }
+    }
+}
+
+void Joint::validate() const {
+    if ((type != "hinge" && type != "slider") || parent > max_id || !finite(anchor) ||
+        glm::any(glm::greaterThan(glm::abs(anchor), glm::vec3(1000.0F))) || !finite(axis) ||
+        glm::length(axis) < 0.000001F || !std::isfinite(limit_min) || !std::isfinite(limit_max) ||
+        limit_min > 0 || limit_max < 0 ||
+        (type == "hinge" && (limit_min < -glm::pi<float>() || limit_max > glm::pi<float>())) ||
+        (type == "slider" && (limit_min < -1000.0F || limit_max > 1000.0F)) ||
+        !std::isfinite(damping) || damping < 0 || damping > 1000000.0F) {
+        throw std::invalid_argument("invalid joint type, parent, anchor, axis, limits, or damping");
     }
 }
 
@@ -168,15 +212,22 @@ void Mesh::validate() const {
 
 void RigidBody::validate() const {
     if ((motion != "static" && motion != "dynamic" && motion != "kinematic") ||
-        (shape != "box" && shape != "sphere") || !std::isfinite(mass) || mass < 0.001F ||
-        mass > 1000000 || !std::isfinite(friction) || friction < 0 || friction > 1 ||
-        !std::isfinite(restitution) || restitution < 0 || restitution > 1 ||
+        (shape != "box" && shape != "sphere" && shape != "capsule") || !std::isfinite(mass) ||
+        mass < 0.001F || mass > 1000000 || !std::isfinite(friction) || friction < 0 ||
+        friction > 1 || !std::isfinite(restitution) || restitution < 0 || restitution > 1 ||
         !std::isfinite(gravity_scale) || gravity_scale < 0 || gravity_scale > 4 ||
         !finite(linear_velocity) ||
         glm::any(glm::greaterThan(glm::abs(linear_velocity), glm::vec3(500.0F))) ||
-        (motion == "static" && linear_velocity != glm::vec3(0))) {
+        !finite(angular_velocity) ||
+        glm::any(glm::greaterThan(glm::abs(angular_velocity), glm::vec3(100.0F))) ||
+        (motion == "static" &&
+         (linear_velocity != glm::vec3(0) || angular_velocity != glm::vec3(0)))) {
         throw std::invalid_argument(
             "invalid rigid body motion, shape, material, mass, or velocity");
+    }
+    if (motion == "dynamic" && !glm::any(allowed_translation) &&
+        (lock_rotation || !glm::any(allowed_rotation))) {
+        throw std::invalid_argument("dynamic bodies need at least one free degree of freedom");
     }
 }
 
@@ -263,22 +314,31 @@ Json entity_json(const Entity& entity) {
     }
     if (entity.rigid_body) {
         const auto& b = *entity.rigid_body;
-        data["rigid_body"] = {
-            {"motion", b.motion},
-            {"shape", b.shape},
-            {"mass", b.mass},
-            {"friction", b.friction},
-            {"restitution", b.restitution},
-            {"gravity_scale", b.gravity_scale},
-            {"sensor", b.sensor},
-            {"lock_rotation", b.lock_rotation},
-            {"linear_velocity", {b.linear_velocity.x, b.linear_velocity.y, b.linear_velocity.z}}};
+        data["rigid_body"] = {{"motion", b.motion},
+                              {"shape", b.shape},
+                              {"mass", b.mass},
+                              {"friction", b.friction},
+                              {"restitution", b.restitution},
+                              {"gravity_scale", b.gravity_scale},
+                              {"sensor", b.sensor},
+                              {"lock_rotation", b.lock_rotation},
+                              {"allowed_translation", json(b.allowed_translation)},
+                              {"allowed_rotation", json(b.allowed_rotation)},
+                              {"linear_velocity", json(b.linear_velocity)},
+                              {"angular_velocity", json(b.angular_velocity)}};
+    }
+    if (entity.joint) {
+        const auto& j = *entity.joint;
+        data["joint"] = {{"type", j.type},           {"parent", j.parent},
+                         {"anchor", json(j.anchor)}, {"axis", json(j.axis)},
+                         {"limited", j.limited},     {"limit_min", j.limit_min},
+                         {"limit_max", j.limit_max}, {"damping", j.damping}};
     }
     return data;
 }
 
 Entity entity_from_json(const Json& data) {
-    require_keys(data, {"name", "transform", "camera", "script", "mesh", "rigid_body"});
+    require_keys(data, {"name", "transform", "camera", "script", "mesh", "rigid_body", "joint"});
     Entity entity;
     if (data.contains("name")) {
         entity.name = data.at("name").get<std::string>();
@@ -333,7 +393,8 @@ Entity entity_from_json(const Json& data) {
     if (data.contains("rigid_body")) {
         const auto& b = data.at("rigid_body");
         require_keys(b, {"motion", "shape", "mass", "friction", "restitution", "gravity_scale",
-                         "sensor", "lock_rotation", "linear_velocity"});
+                         "sensor", "lock_rotation", "allowed_translation", "allowed_rotation",
+                         "linear_velocity", "angular_velocity"});
         entity.rigid_body = RigidBody{};
         auto& body = *entity.rigid_body;
         if (b.contains("motion"))
@@ -352,8 +413,44 @@ Entity entity_from_json(const Json& data) {
             body.sensor = b.at("sensor").get<bool>();
         if (b.contains("lock_rotation"))
             body.lock_rotation = b.at("lock_rotation").get<bool>();
+        if (b.contains("allowed_translation"))
+            body.allowed_translation = bvec3(b.at("allowed_translation"));
+        if (b.contains("allowed_rotation"))
+            body.allowed_rotation = bvec3(b.at("allowed_rotation"));
         if (b.contains("linear_velocity"))
             body.linear_velocity = vec3(b.at("linear_velocity"));
+        if (b.contains("angular_velocity"))
+            body.angular_velocity = vec3(b.at("angular_velocity"));
+    }
+    if (data.contains("joint")) {
+        const auto& j = data.at("joint");
+        require_keys(j, {"type", "parent", "anchor", "axis", "limited", "limit_min", "limit_max",
+                         "damping"});
+        entity.joint = Joint{};
+        auto& joint = *entity.joint;
+        if (j.contains("type"))
+            joint.type = j.at("type").get<std::string>();
+        if (j.contains("parent")) {
+            const auto& parent = j.at("parent");
+            if (!parent.is_number_integer() ||
+                (parent.is_number_integer() && !parent.is_number_unsigned() &&
+                 parent.get<std::int64_t>() < 0)) {
+                throw std::invalid_argument("joint parent must be a non-negative integer ID");
+            }
+            joint.parent = parent.get<EntityId>();
+        }
+        if (j.contains("anchor"))
+            joint.anchor = vec3(j.at("anchor"));
+        if (j.contains("axis"))
+            joint.axis = vec3(j.at("axis"));
+        if (j.contains("limited"))
+            joint.limited = j.at("limited").get<bool>();
+        if (j.contains("limit_min"))
+            joint.limit_min = number(j.at("limit_min"));
+        if (j.contains("limit_max"))
+            joint.limit_max = number(j.at("limit_max"));
+        if (j.contains("damping"))
+            joint.damping = number(j.at("damping"));
     }
     entity.validate();
     return entity;
@@ -394,6 +491,12 @@ Scene Scene::from_json(const Json& data) {
     }
     if (highest == max_id) {
         throw std::invalid_argument("scene IDs exhausted");
+    }
+    for (const auto& [id, entity] : scene.entities_) {
+        if (entity.joint && entity.joint->parent != 0 &&
+            (entity.joint->parent == id || !scene.entities_.contains(entity.joint->parent))) {
+            throw std::invalid_argument("joint parent must be another entity in the scene");
+        }
     }
     scene.next_id_ = data.contains("next_id") ? entity_id(data.at("next_id")) : highest + 1;
     if (scene.next_id_ <= highest) {

@@ -134,6 +134,14 @@ may have no collider, and an invisible sensor may have no mesh. Both work throug
 {"op":"create","components":{"name":"Ball","transform":{"position":[0,3,0]},"mesh":{"primitive":"sphere","color":[0.8,0.1,0.2],"metallic":0.2,"roughness":0.3},"rigid_body":{"motion":"dynamic","shape":"sphere","mass":2,"restitution":0.7}}}
 ```
 
+An optional `joint` component on an entity with a dynamic rigid body attaches it
+to a parent entity's body (or the world with `parent: 0`) through a hinge or
+slider; scene files must reference existing parents other than the entity itself.
+
+```json
+{"op":"create","components":{"name":"Arm","transform":{"position":[0,2.4,0],"scale":[0.2,1.2,0.2]},"rigid_body":{"motion":"dynamic","shape":"capsule"},"joint":{"type":"hinge","parent":1,"anchor":[0,0.6,0],"axis":[0,0,1],"limited":true,"limit_min":-1.5,"limit_max":1.5,"damping":0.5}}}
+```
+
 Defaults and bounds are in [graphics/physics contracts](graphics-physics.md).
 Discovery reports `physics:true`, `physics_backend:"Jolt"`, and `renderer:false`:
 the command editor simulates physics and authors meshes but does not own a viewport.

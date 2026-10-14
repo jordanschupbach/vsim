@@ -6,14 +6,15 @@ from the original product brief. See the actual results in [validation](validati
 | Area | Current evidence / required work |
 |---|---|
 | C++ static core, CMake, separate editor/runtimes | Implemented and covered by installation/protocol tests |
-| Entities, camera, mesh, rigid body, strict scenes | Validated components, round trips, prefab and undo tests |
-| Lua lifecycle and physics API | 18 bindings; conformance scene covers every binding |
+| Entities, camera, mesh, rigid body, joint, strict scenes | Validated components, round trips, prefab and undo tests |
+| Lua lifecycle and physics API | 23 bindings; conformance scene covers every binding |
 | Crystal Courier 3D | Perspective arena, jumping, crates, bouncing ball, moving lift, sensors, victory/restart; input-only winning route tested |
 | GLFW/Vulkan/NVRHI | Offscreen rendering/readback/resize/device lifetime tested on Mesa llvmpipe; window presentation implemented but local desktop access blocked |
 | PBR/HDR/shadows | Procedural meshes, metallic/roughness GGX, RGBA16F, ACES-fitted tonemap, directional PCF shadow map |
 | SSAO | 32 hemisphere samples, world-space radius, depth/normal-aware filtering, indirect-light composition; offscreen image and validation tests pass |
 | glTF/textures, HDRI/IBL | Not implemented |
-| Jolt physics | Real static/dynamic/kinematic bodies, box/sphere, CCD, sensors, ground queries, impulses, Lua control |
+| Jolt physics | Real static/dynamic/kinematic bodies, box/sphere/capsule, per-axis DOF locks, CCD, sensors, ground queries, impulses, hinge/slider joints with limits, damping, joint state/force APIs, Lua control |
+| Headless SDK | `just install-sdk` installs headers, `libvsim_core.a`/`libJolt.a`, the `vsim` CMake package, and `vsim.pc`; the flake's `core` package builds the same without graphics |
 | Agent editing | Tested transactional batches, persistent play/stop previews, selection, shared camera/focus/pick commands, dirty state, undo/redo, atomic save replacement; CLI is `vsim_editor_cli` |
 | Graphical editor | Dear ImGui/NVRHI panels, inspector, ImGuizmo, picking/navigation, undo and play/stop compiled; offscreen image and mouse interaction tests pass; desktop checks remain |
 | Audio | miniaudio not yet integrated |

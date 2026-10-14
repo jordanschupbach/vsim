@@ -34,6 +34,23 @@ void panel(const char* title, ImVec2 position, ImVec2 size, ImGuiWindowFlags fla
 bool vector_field(const char* label, glm::vec3& value, float speed = 0.1F) {
     return ImGui::DragFloat3(label, glm::value_ptr(value), speed);
 }
+bool axes_field(const char* label, glm::bvec3& value) {
+    bool changed = false;
+    ImGui::PushID(label);
+    for (int axis = 0; axis < 3; ++axis) {
+        bool flag = value[axis];
+        if (axis > 0)
+            ImGui::SameLine();
+        if (ImGui::Checkbox(axis == 0 ? "X" : axis == 1 ? "Y" : "Z", &flag)) {
+            value[axis] = flag;
+            changed = true;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(label);
+    ImGui::PopID();
+    return changed;
+}
 } // namespace
 struct EditorUi::Impl {
     Editor& editor;
@@ -360,9 +377,9 @@ struct EditorUi::Impl {
                     body.motion = motions[motion];
                     draft_changed = true;
                 }
-                const char* shapes[]{"box", "sphere"};
-                int shape = body.shape == "sphere" ? 1 : 0;
-                if (ImGui::Combo("Shape", &shape, shapes, 2)) {
+                const char* shapes[]{"box", "sphere", "capsule"};
+                int shape = body.shape == "sphere" ? 1 : body.shape == "capsule" ? 2 : 0;
+                if (ImGui::Combo("Shape", &shape, shapes, 3)) {
                     body.shape = shapes[shape];
                     draft_changed = true;
                 }
@@ -372,7 +389,31 @@ struct EditorUi::Impl {
                 draft_changed |= ImGui::DragFloat("Gravity scale", &body.gravity_scale, 0.01F);
                 draft_changed |= ImGui::Checkbox("Sensor", &body.sensor);
                 draft_changed |= ImGui::Checkbox("Lock rotation", &body.lock_rotation);
+                draft_changed |= axes_field("Translation axes", body.allowed_translation);
+                draft_changed |= axes_field("Rotation axes", body.allowed_rotation);
                 draft_changed |= vector_field("Velocity", body.linear_velocity);
+                draft_changed |= vector_field("Angular velocity", body.angular_velocity);
+            }
+            ImGui::Separator();
+            if (component("Joint", draft.joint)) {
+                auto& joint = *draft.joint;
+                const char* types[]{"hinge", "slider"};
+                int type = joint.type == "slider" ? 1 : 0;
+                if (ImGui::Combo("Type", &type, types, 2)) {
+                    joint.type = types[type];
+                    draft_changed = true;
+                }
+                auto parent = static_cast<unsigned long long>(joint.parent);
+                if (ImGui::InputScalar("Parent entity (0 = world)", ImGuiDataType_U64, &parent)) {
+                    joint.parent = parent;
+                    draft_changed = true;
+                }
+                draft_changed |= vector_field("Anchor", joint.anchor, 0.01F);
+                draft_changed |= vector_field("Axis", joint.axis, 0.01F);
+                draft_changed |= ImGui::Checkbox("Limited", &joint.limited);
+                draft_changed |= ImGui::DragFloat("Limit min", &joint.limit_min, 0.01F);
+                draft_changed |= ImGui::DragFloat("Limit max", &joint.limit_max, 0.01F);
+                draft_changed |= ImGui::DragFloat("Damping", &joint.damping, 0.01F);
             }
             ImGui::Separator();
             if (component("Camera", draft.camera)) {

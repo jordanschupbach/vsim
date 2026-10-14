@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+# VSim headless engine core. Link vsim::core; it carries vsim::Jolt, glm,
+# nlohmann_json, and the Lua library it was built against.
+include(CMakeFindDependencyMacro)
+# Hints point at the packages this SDK was built with, so consumers need no
+# CMAKE_PREFIX_PATH when those are still present (they are in a Nix store).
+find_dependency(glm 1.0 CONFIG HINTS "@glm_DIR@")
+find_dependency(nlohmann_json 3.11 CONFIG HINTS "@nlohmann_json_DIR@")
+include("${CMAKE_CURRENT_LIST_DIR}/vsimTargets.cmake")
+
+set_and_check(VSIM_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+set_and_check(VSIM_LIBRARY_DIR "@PACKAGE_CMAKE_INSTALL_LIBDIR@")
+set(VSIM_GLM_INCLUDE_DIRS "@VSIM_GLM_INCLUDE_DIRS@")
+set(VSIM_JSON_INCLUDE_DIRS "@VSIM_JSON_INCLUDE_DIRS@")
+set(VSIM_GLM_LIBRARY "@VSIM_GLM_LIBRARY@")
+set(VSIM_LUA_LIBRARIES "@VSIM_LUA_LIBRARIES@")
+check_required_components(vsim)

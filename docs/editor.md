@@ -6,7 +6,7 @@ scene, build with `just build-editor`, then run `build/debug/vsim_editor`.
 
 The left panel lists entities and offers **Add cube**, **Add entity**, and prefab
 controls. Click an entity or a visible mesh to select it. The right panel edits
-its name, transform, mesh/material, rigid body, camera, and Lua script. Changes
+its name, transform, mesh/material, rigid body, joint, camera, and Lua script. Changes
 preview immediately when valid; **Apply** commits them as one undo entry, and
 **Revert** restores the authored values. Validation errors remain visible in the
 status bar so the fields can be corrected.
