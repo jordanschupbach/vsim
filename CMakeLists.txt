@@ -56,6 +56,8 @@ target_compile_features(vsim_core PUBLIC cxx_std_20)
 if(VSIM_INSTALL_SDK)
   # Headless SDK: `find_package(vsim CONFIG)` gives vsim::core (with vsim::Jolt, glm,
   # nlohmann_json, and Lua as link dependencies); `pkg-config vsim` gives the same flags.
+  # A 3D build also exports the Vulkan renderer as vsim::renderer (see below).
+  set(VSIM_SDK_RENDERER ${VSIM_BUILD_3D})
   include(CMakePackageConfigHelpers)
   install(TARGETS vsim_core Jolt EXPORT vsimTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -154,8 +156,33 @@ if(VSIM_BUILD_3D)
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_shaders.py" "${shader_header}" ${shader_binaries}
     DEPENDS ${shader_binaries} scripts/embed_shaders.py VERBATIM)
   add_library(vsim_renderer STATIC src/renderer.cpp src/overlay.cpp "${shader_header}")
+  add_library(vsim::renderer ALIAS vsim_renderer)
+  set_target_properties(vsim_renderer PROPERTIES EXPORT_NAME renderer) # Installed as vsim::renderer.
   target_include_directories(vsim_renderer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-  target_link_libraries(vsim_renderer PUBLIC vsim_core PRIVATE nvrhi_vk glfw Vulkan::Headers Vulkan::Vulkan vsim_options)
+  target_link_libraries(vsim_renderer PUBLIC vsim_core PRIVATE nvrhi_vk glfw Vulkan::Headers Vulkan::Vulkan $<BUILD_INTERFACE:vsim_options>)
+  if(VSIM_INSTALL_SDK)
+    # The SDK exports the renderer too, for consumers that render scenes offscreen
+    # (screenshots, videos). Its static dependencies (NVRHI and the Vulkan headers
+    # target, which carries no include paths once installed) travel in the export set;
+    # vsimConfig.cmake finds GLFW and the Vulkan loader again. `pkg-config vsim-renderer`
+    # gives the same flags with absolute library paths.
+    install(TARGETS vsim_renderer nvrhi nvrhi_vk Vulkan-Headers EXPORT vsimTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(DIRECTORY "${VSIM_NVRHI_SOURCE}/include/nvrhi" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    set(VSIM_PC_RENDERER_LIBS "")
+    foreach(target IN ITEMS glfw Vulkan::Vulkan)
+      foreach(property IN ITEMS IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_NOCONFIG IMPORTED_LOCATION)
+        get_target_property(location ${target} ${property})
+        if(location)
+          get_filename_component(location_dir "${location}" DIRECTORY)
+          string(APPEND VSIM_PC_RENDERER_LIBS " ${location} -Wl,-rpath,${location_dir}")
+          break()
+        endif()
+      endforeach()
+    endforeach()
+    configure_file(cmake/vsim-renderer.pc.in "${CMAKE_CURRENT_BINARY_DIR}/vsim-renderer.pc" @ONLY)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/vsim-renderer.pc" DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+  endif()
   add_executable(vsim_game apps/game.cpp)
   target_link_libraries(vsim_game PRIVATE vsim_renderer vsim_options)
   set_target_properties(vsim_game PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)

@@ -14,7 +14,7 @@ from the original product brief. See the actual results in [validation](validati
 | SSAO | 32 hemisphere samples, world-space radius, depth/normal-aware filtering, indirect-light composition; offscreen image and validation tests pass |
 | glTF/textures, HDRI/IBL | Not implemented |
 | Jolt physics | Real static/dynamic/kinematic bodies, box/sphere/capsule, per-axis DOF locks, CCD, sensors, ground queries, impulses, hinge/slider joints with limits, damping, joint state/force APIs, Lua control |
-| Headless SDK | `just install-sdk` installs headers, `libvsim_core.a`/`libJolt.a`, the `vsim` CMake package, and `vsim.pc`; the flake's `core` package builds the same without graphics |
+| Headless SDK | `just install-sdk` installs headers, `libvsim_core.a`/`libJolt.a`, the `vsim` CMake package, and `vsim.pc`; the flake's `core` package builds the same without graphics; a 3D build (`just install-sdk-3d`, flake default) also exports `vsim::renderer` and `vsim-renderer.pc` |
 | Agent editing | Tested transactional batches, persistent play/stop previews, selection, shared camera/focus/pick commands, dirty state, undo/redo, atomic save replacement; CLI is `vsim_editor_cli` |
 | Graphical editor | Dear ImGui/NVRHI panels, inspector, ImGuizmo, picking/navigation, undo and play/stop compiled; offscreen image and mouse interaction tests pass; desktop checks remain |
 | Audio | miniaudio not yet integrated |

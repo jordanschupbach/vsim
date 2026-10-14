@@ -102,6 +102,12 @@ target_link_libraries(my_program PRIVATE vsim::core)
 ```
 
 `nix build .#core` produces the same prefix without Vulkan, GLFW, or the editor.
+A 3D build (`just install-sdk-3d`, or the flake's default package) adds
+`vsim::renderer`, `lib/libvsim_renderer.a` with NVRHI, and `vsim-renderer.pc`:
+`vsim::Renderer` with `offscreen = true` draws scenes without a display and
+`capture()` reads the frame back, which is how consumers record videos. The
+consumer's environment supplies GLFW and the Vulkan loader (`find_package(vsim)`
+finds them again), and a Vulkan driver, such as Mesa's llvmpipe, at run time.
 Scenes can define articulated bodies: a `joint` component (hinge or slider, with
 limits and damping) connects an entity's dynamic body to a parent body, and
 `PhysicsWorld` exposes joint coordinates, teleports, and joint forces. This is the

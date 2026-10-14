@@ -97,6 +97,13 @@ install prefix="dist/runtime": (build "release")
 install-sdk prefix="dist/sdk": (build "sdk")
     cmake --install build/sdk --prefix "$1"
 
+# Build the engine with the Vulkan renderer and install the SDK plus vsim::renderer
+# (headers, static libraries, the CMake package, vsim.pc and vsim-renderer.pc).
+install-sdk-3d prefix="dist/sdk":
+    cmake --preset release -DCMAKE_INSTALL_LIBDIR=lib
+    cmake --build --preset release --parallel "${VSIM_BUILD_JOBS:-4}"
+    cmake --install build/release --prefix "$1"
+
 # Test the headless core (physics, scenes, Lua, conformance, installation).
 test-sdk: (build "sdk")
     ctest --preset sdk

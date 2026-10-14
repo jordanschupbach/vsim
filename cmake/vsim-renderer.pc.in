@@ -1,0 +1,12 @@
+# VSim Vulkan renderer (NVRHI) on top of the engine core, relocatable. Needs a Vulkan
+# driver at run time; offscreen rendering works without a display.
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: vsim-renderer
+Description: VSim renderer: offscreen or windowed Vulkan rendering of scenes
+Version: @PROJECT_VERSION@
+Requires: vsim
+Cflags: -I${includedir}
+Libs: -L${libdir} -lvsim_renderer -lnvrhi_vk -lnvrhi@VSIM_PC_RENDERER_LIBS@
