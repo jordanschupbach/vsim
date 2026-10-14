@@ -4,7 +4,15 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_set>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace vsim {
 Json parse_json(std::string_view document) {
@@ -75,9 +83,9 @@ std::string encode_scene(const Scene& scene) {
     return document;
 }
 
-void save_scene(const Scene& scene, const std::filesystem::path& path) {
+void save_scene(const Scene& scene, const std::filesystem::path& path, bool overwrite) {
     const auto document = encode_scene(scene);
-    if (std::filesystem::exists(path))
+    if (!overwrite && std::filesystem::exists(path))
         throw std::runtime_error("output already exists");
     auto parent = path.parent_path();
     if (parent.empty())
@@ -108,6 +116,16 @@ void save_scene(const Scene& scene, const std::filesystem::path& path) {
     output.close();
     // A hard link atomically publishes complete bytes and fails if the destination exists.
     // The staging path is on the same filesystem. No non-atomic fallback is attempted.
-    std::filesystem::create_hard_link(staging, path);
+    if (!overwrite) {
+        std::filesystem::create_hard_link(staging, path);
+    } else {
+#ifdef _WIN32
+        if (!MoveFileExW(staging.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+            throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
+                                    "cannot replace scene");
+#else
+        std::filesystem::rename(staging, path);
+#endif
+    }
 }
 } // namespace vsim

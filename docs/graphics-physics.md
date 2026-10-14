@@ -58,10 +58,24 @@ have GPU readback tests.
 The forward renderer uses metallic/roughness GGX shading, a fixed directional
 sun, a 2048² depth shadow map with 3x3 PCF, hemispheric ambient light, RGBA16F HDR,
 and an ACES-fitted tonemap into sRGB. Shadows cover a fixed 36 m region about the
-origin. This is not HDRI/IBL, a configurable lighting system, SSAO, cascaded/contact
-shadows, or texture/glTF import. Those remain separate milestones.
+origin. A full-resolution SSAO pass samples 32 directions in the surface's world-space
+hemisphere, followed by horizontal and vertical seven-tap depth/normal-aware filters.
+Indirect light has a separate HDR attachment; AO attenuates that term before
+tonemapping, leaving the direct-light and emission terms intact. Position
+reconstruction accounts for the editor's subviewport and NVRHI's Y convention.
 
-Two frames have independent constants, depth/shadow/HDR/output/overlay resources
+`RendererConfig::ambient_occlusion` and `Renderer::set_ambient_occlusion` accept
+`enabled` (default true), world-space `radius` (default 1 m, range 0.01..100),
+`bias` (default 0.035 m, range 0 <= bias < radius), `strength` (default 1.5, range
+0..4), and `visualize` (default false). Disabled AO and zero strength produce unit
+visibility. All values are validated before changing renderer state. The game
+accepts `--no-ssao` and `--show-ssao` for comparison and diagnostic captures.
+
+SSAO uses only the current frame's visible surfaces; hidden/offscreen occluders
+and temporal reprojection are not represented. HDRI/IBL, configurable lighting,
+cascaded/contact shadows, and texture/glTF import remain separate milestones.
+
+Two frames have independent constants, depth/shadow/HDR/ambient/normal/AO/output/overlay resources
 and completion queries. Swapchain presentation semaphores belong to swapchain
 images. Resize waits for idle before releasing targets; minimized windows skip
 rendering and wait briefly for events. Physics continues while minimized. Device

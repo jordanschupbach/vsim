@@ -34,6 +34,8 @@
             "-DVSIM_NVRHI_SOURCE=${sourceFor "nvrhi" "NVIDIA-RTX" "NVRHI"}"
             "-DVSIM_JOLT_SOURCE=${sourceFor "jolt" "jrouwe" "JoltPhysics"}"
             "-DVSIM_VULKAN_HEADERS_SOURCE=${sourceFor "vulkan_headers" "KhronosGroup" "Vulkan-Headers"}"
+            "-DVSIM_IMGUI_SOURCE=${sourceFor "imgui" "ocornut" "imgui"}"
+            "-DVSIM_IMGUIZMO_SOURCE=${sourceFor "imguizmo" "CedricGuillemet" "ImGuizmo"}"
           ];
           doCheck = true;
           checkPhase = ''

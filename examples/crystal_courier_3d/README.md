@@ -12,8 +12,15 @@ the blue ball bounces, and the cyan lift moves vertically. One crystal is on a
 raised platform that requires jumping. The physics tests complete the level using
 only movement/jump input, without teleporting or editing gameplay state.
 
-`generate.py` authors the level and embeds `game.lua`; run `just generate` after
-editing either. The checked-in `scene.json` needs no external assets or scripts.
+The Camera entity runs `camera.lua`, slowly orbiting the arena while looking at
+its center (one lap per minute). This runs in `just game` and the editor's **Play**
+mode; the editor camera remains free while authoring. Change `degrees_per_second`
+in the script to adjust the speed, or set it to zero for a fixed view. Movement
+controls stay aligned with the world's X/Z axes as the view rotates.
+
+`generate.py` authors the level and embeds `game.lua` and `camera.lua`; run
+`just generate` after editing these sources. The checked-in `scene.json` needs
+no external assets or scripts.
 All geometry, material colors, and HUD glyphs are authored in the repository.
 There are no downloaded art assets or runtime network requests.
 

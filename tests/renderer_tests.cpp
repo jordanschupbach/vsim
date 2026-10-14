@@ -9,6 +9,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 
@@ -76,6 +77,15 @@ int main(int argc, char** argv) {
         test("invalid dimensions fail before GPU creation", [] {
             rejects([] { Renderer invalid({0, 240, true, true}); });
             rejects([] { Renderer invalid({320, 4097, true, true}); });
+            rejects([] {
+                RendererConfig invalid;
+                invalid.ambient_occlusion.radius = std::numeric_limits<float>::quiet_NaN();
+                Renderer renderer(invalid);
+            });
+            rejects([] { AmbientOcclusion{true, 1, 0.035F, 4.01F, false}.validate(); });
+            rejects([] { AmbientOcclusion{false, 1, -0.01F, 1, false}.validate(); });
+            AmbientOcclusion{true, 0.01F, 0, 0, false}.validate();
+            AmbientOcclusion{true, 100, 99, 4, true}.validate();
             rejects([] { Image{0, 0, {}}.write_ppm("invalid.ppm"); });
             rejects([] { Image{0x80000000U, 0x80000000U, {}}.write_ppm("invalid.ppm"); });
         });
@@ -96,6 +106,105 @@ int main(int argc, char** argv) {
                 rejects([&] { renderer.resize(0, 240); });
                 rejects([&] { renderer.set_overlay(std::string(129, 'A'), "", ""); });
                 rejects([&] { draw(Scene{}); });
+            });
+            test("editor camera override renders into its viewport without mutating scene", [&] {
+                Scene scene;
+                (void)scene.create(mesh({}, {1, 0.01F, 0.01F}));
+                const auto original = scene.json();
+                RenderView view;
+                view.transform.position = {0, 0, 5};
+                view.bounds = {0.5F, 0, 0.5F, 1};
+                CHECK(renderer.draw(Scene{}, &view));
+                const auto background = renderer.capture();
+                int callbacks = 0;
+                for (int i = 0; i < 4; ++i)
+                    CHECK(renderer.draw(scene, &view, [&](const RenderFrame&) { ++callbacks; }));
+                const auto image = renderer.capture();
+                const auto object = pixel(image, image.width * 3 / 4, image.height / 2);
+                CHECK(object[0] > object[2] + 70);
+                const auto outside = pixel(image, image.width / 4, image.height / 2);
+                CHECK(outside == pixel(background, image.width / 4, image.height / 2));
+                CHECK(callbacks == 4);
+                CHECK(scene.json() == original);
+                view.bounds = {0, 0, 0, 1};
+                rejects([&] { (void)renderer.draw(scene, &view); });
+                view.bounds = {0, 0, 2, 1};
+                rejects([&] { (void)renderer.draw(scene, &view); });
+                view.bounds = {0, 0, 1, 1};
+                CHECK(renderer.draw(scene, &view));
+                renderer.wait_idle();
+                CHECK(renderer.validation_errors() == 0);
+            });
+            test("SSAO darkens contacts while preserving open surfaces and empty background", [&] {
+                Scene scene;
+                const auto view = camera({4, 3, 5});
+                (void)scene.create(view);
+                (void)scene.create(mesh({0, -0.6F, 0}, glm::vec3(0.6F), {12, 0.2F, 12}));
+                AmbientOcclusion ao;
+                ao.visualize = true;
+                renderer.set_ambient_occlusion(ao);
+                draw(scene);
+                const auto open = renderer.capture();
+                for (const auto point : {glm::vec3(0, -0.5F, 0), glm::vec3(2, -0.5F, 0)}) {
+                    const auto xy = project(view, point, open.width, open.height);
+                    CHECK(pixel(open, xy[0], xy[1])[0] >= 250);
+                }
+                (void)scene.create(mesh({}, glm::vec3(0.6F)));
+                draw(scene);
+                const auto contact = renderer.capture();
+                contact.write_ppm(std::string(VSIM_BINARY_DIR) + "/ssao-contacts.ppm");
+                std::size_t dark = 0;
+                for (std::size_t i = 0; i < contact.rgba.size(); i += 4)
+                    if (contact.rgba[i] < 245)
+                        ++dark;
+                CHECK(dark > 100);
+                CHECK(pixel(contact, 0, 0)[0] == 255);
+                const auto remote = project(view, {2, -0.5F, 0}, contact.width, contact.height);
+                CHECK(pixel(contact, remote[0], remote[1])[0] >= 250);
+                ao.enabled = false;
+                renderer.set_ambient_occlusion(ao);
+                draw(scene);
+                const auto disabled = renderer.capture();
+                for (std::size_t i = 0; i < disabled.rgba.size(); i += 4)
+                    CHECK(disabled.rgba[i] == 255);
+                ao.enabled = true;
+                ao.strength = 0;
+                renderer.set_ambient_occlusion(ao);
+                draw(scene);
+                CHECK(renderer.capture().rgba == disabled.rgba);
+                ao = {};
+                ao.enabled = false;
+                renderer.set_ambient_occlusion(ao);
+                draw(scene);
+                const auto unoccluded = renderer.capture();
+                renderer.set_ambient_occlusion({});
+                draw(scene);
+                const auto lit = renderer.capture();
+                std::size_t shaded = 0;
+                for (std::size_t i = 0; i < lit.rgba.size(); ++i) {
+                    CHECK(static_cast<int>(lit.rgba[i]) <=
+                          static_cast<int>(unoccluded.rgba[i]) + 1);
+                    if (static_cast<int>(unoccluded.rgba[i]) - lit.rgba[i] > 2)
+                        ++shaded;
+                }
+                CHECK(shaded > 100);
+                rejects([&] {
+                    auto invalid = ao;
+                    invalid.radius = 0;
+                    renderer.set_ambient_occlusion(invalid);
+                });
+                rejects([&] {
+                    auto invalid = ao;
+                    invalid.bias = invalid.radius;
+                    renderer.set_ambient_occlusion(invalid);
+                });
+                rejects([&] {
+                    auto invalid = ao;
+                    invalid.strength = -1;
+                    renderer.set_ambient_occlusion(invalid);
+                });
+                draw(scene);
+                CHECK(renderer.validation_errors() == 0);
             });
             test("near red geometry occludes later blue geometry with correct readback channels",
                  [&] {

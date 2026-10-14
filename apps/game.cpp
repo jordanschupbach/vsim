@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
                 std::cout
                     << "Usage: vsim_game --scene PATH [--validate] [--frames N] [--offscreen]\n"
                        "                 [--width N] [--height N] [--capture PATH.ppm] [--output "
-                       "NEW_SCENE]\n"
+                       "NEW_SCENE] [--no-ssao] [--show-ssao]\n"
                        "WASD/arrows: move | Space: jump | R: restart | Escape: quit\n";
                 return 0;
             }
@@ -54,6 +54,14 @@ int main(int argc, char** argv) {
                 throw std::invalid_argument("duplicate option: " + argument);
             if (argument == "--validate") {
                 config.validation = true;
+                continue;
+            }
+            if (argument == "--no-ssao") {
+                config.ambient_occlusion.enabled = false;
+                continue;
+            }
+            if (argument == "--show-ssao") {
+                config.ambient_occlusion.visualize = true;
                 continue;
             }
             if (argument == "--offscreen") {

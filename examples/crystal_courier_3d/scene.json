@@ -67,6 +67,9 @@
           "vertical_fov": 48,
           "near_plane": 0.1,
           "far_plane": 150
+        },
+        "script": {
+          "source": "-- Orbit the arena while looking at its center. The authored camera position\n-- determines the starting angle, radius, and height; the lens stays unchanged.\nlocal degrees_per_second = 6 -- One full orbit per minute. Set to 0 for a fixed view.\nlocal target_x, target_y, target_z = 0, 0, 0\nlocal angle, radius, height, pitch\n\nfunction on_start(self)\n    local x, y, z = engine.position(self)\n    local dx, dz = x - target_x, z - target_z\n    radius = math.sqrt(dx * dx + dz * dz)\n    assert(radius > 0, \"Orbit camera must be offset from the target on the XZ plane\")\n    height = y - target_y\n    angle = math.atan(dx, dz)\n    pitch = -math.atan(height, radius)\nend\n\nfunction on_update(self, dt)\n    angle = (angle + math.rad(degrees_per_second) * dt) % (2 * math.pi)\n    engine.set_position(self, target_x + radius * math.sin(angle),\n                        target_y + height, target_z + radius * math.cos(angle))\n\n    -- Yaw about world +Y, then pitch about local +X. Cameras look along -Z;\n    -- the engine's quaternion order is w, x, y, z.\n    local cy, sy = math.cos(angle / 2), math.sin(angle / 2)\n    local cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)\n    engine.set_rotation(self, cy * cp, cy * sp, sy * cp, -sy * sp)\nend\n"
         }
       }
     },

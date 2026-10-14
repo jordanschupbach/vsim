@@ -9,7 +9,7 @@ default:
 shell:
     nix develop
 
-# Fetch the pinned NVRHI, Jolt, and Vulkan header sources (requires network once).
+# Fetch all pinned engine and editor sources (requires network once).
 deps:
     python3 scripts/fetch_dependencies.py
 
@@ -44,10 +44,19 @@ game-cli: (build "debug")
 
 alias run := game
 
-# Start the JSON command editor with the example game (or another scene) loaded.
-editor scene="examples/crystal_courier_3d/scene.json": (build "debug")
+# Open the graphical scene editor. Optional arguments include --validate.
+editor scene="examples/crystal_courier_3d/scene.json" *args: build-editor
+    ./build/debug/vsim_editor --scene "$1" "${@:2}"
+
+# Explicitly enable the GUI even after a headless development configuration.
+build-editor:
+    cmake --preset debug -DVSIM_BUILD_EDITOR=ON -DVSIM_BUILD_3D=ON -DVSIM_BUILD_EDITOR_GUI=ON
+    cmake --build --preset debug --parallel "${VSIM_BUILD_JOBS:-4}"
+
+# Start the JSON command service for agents and headless authoring.
+editor-cli scene="examples/crystal_courier_3d/scene.json": (build "debug")
     @echo 'VSim command editor: enter {"op":"scene"} or {"op":"describe"}. Ctrl-D exits.' >&2
-    ./build/debug/vsim_editor --scene "$1"
+    ./build/debug/vsim_editor_cli --scene "$1"
 
 # Run a scene for a fixed number of ticks without the terminal frontend.
 runtime scene="examples/crystal_courier_3d/scene.json" ticks="120" preset="debug": (build preset)

@@ -31,6 +31,7 @@ while another engine API call is producing return values.
 | `engine.set(id, json)` | Validate and replace components from JSON string |
 | `engine.position(id)` | Return x, y, z |
 | `engine.set_position(id, x, y, z)` | Change position; retain other components |
+| `engine.set_rotation(id, w, x, y, z)` | Set a finite unit quaternion in w/x/y/z order; retain other components; invalid rotations leave the entity unchanged |
 | `engine.linear_velocity(id)` | Read rigid-body velocity as x, y, z in m/s |
 | `engine.set_linear_velocity(id, x, y, z)` | Set a dynamic/kinematic body's velocity; static bodies reject it |
 | `engine.apply_impulse(id, x, y, z)` | Apply a world-space linear impulse in N s to a dynamic body |

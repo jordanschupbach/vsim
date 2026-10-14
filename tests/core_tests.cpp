@@ -450,6 +450,34 @@ int main() {
         scripts.tick(0.1);
         near(scene.get(id).transform.position.x, 2);
     });
+    test("Lua quaternion setter preserves camera script and other transform fields", [] {
+        Scene scene;
+        auto entity = behavior("function on_update(self) engine.set_rotation(self,0,0,1,0) end");
+        entity.name = "Orbit camera";
+        entity.camera = Camera{48, 0.1F, 150};
+        entity.transform.position = {1, 2, 3};
+        entity.transform.scale = {2, 3, 4};
+        const auto id = scene.create(entity);
+        ScriptSystem scripts(scene);
+        scripts.tick(1.0 / 60);
+        entity.transform.rotation = {0, 0, 1, 0};
+        CHECK(entity_json(scene.get(id)) == entity_json(entity));
+        CHECK(scene.get(id).transform.rotation * glm::vec3(0, 0, -1) == glm::vec3(0, 0, 1));
+    });
+    test("Lua invalid quaternion setters reject without changing the entity", [] {
+        for (const auto* arguments :
+             {"self,0,0,0,0", "self,2,0,0,0", "self,0/0,0,0,1", "self,1,math.huge,0,0",
+              "self,1,0,0,'0'", "self,1,0,0", "999,1,0,0,0", "0,1,0,0,0", "1.5,1,0,0,0"}) {
+            Scene scene;
+            const auto id = scene.create(behavior(std::string("function on_update(self) ") +
+                                                  "engine.set_rotation(" + arguments + ") end"));
+            const auto before = scene.json();
+            ScriptSystem scripts(scene);
+            rejects([&] { scripts.tick(1.0 / 60); });
+            CHECK(scene.json() == before);
+            CHECK(scene.alive(id));
+        }
+    });
     test("Lua syntax and callback failures are reported", [] {
         rejects([] { run_script("this is invalid lua!"); });
         rejects([] { run_script("function on_update() error('failure') end"); });

@@ -1,7 +1,7 @@
 # Editor protocol v1
 
-Start `vsim_editor`, optionally with `--scene PATH` to preload a scene without
-adding an undo entry. `just editor` preloads Crystal Courier by default. Send one
+Start `vsim_editor_cli`, optionally with `--scene PATH` to preload a scene without
+adding an undo entry. `just editor-cli` preloads Crystal Courier by default. The graphical frontend uses the same `Editor` model. Send one
 JSON object per line. The optional
 `id` is null, a string, or an integer and is echoed in the response. Success is
 `{"id":1,"ok":true,"result":...}`; failure is
@@ -20,7 +20,18 @@ terminate the session. Diagnostics must never contaminate stdout.
 | `simulate` | `ticks` integer, 1..10000; optional `actions` object | Execute fresh Lua/Jolt simulation at 60 Hz with the same actions each tick; report ticks/entity count |
 | `undo` / `redo` | None | Restore a complete scene snapshot |
 | `load` | `path` | Load, validate, and replace scene |
-| `save` | `path` | Publish complete scene to a **new** path |
+| `save` | `path`, optional boolean `overwrite` (default false) | Atomically publish scene; replacement requires `overwrite:true` |
+| `batch` | `commands`: 1..1024 scene mutations | Apply all commands as one undo step; return their results in order |
+| `status` | None | Play state, dirty state, current document path, selection, undo/redo availability |
+| `select` | `entity_id` or null | Select an existing authored entity or clear selection |
+| `play` | None | Create a persistent Lua/Jolt preview from a copy of the authored scene |
+| `tick` | `ticks`: 1..10000; optional `actions` | Advance the active preview at 60 Hz |
+| `play_scene` | None | Read the current preview scene |
+| `stop` | None | Discard the preview; authored scene and history are preserved |
+| `view` | None | Editor camera transform and lens, independent of scene camera entities |
+| `set_view` | `transform`, `camera` | Validate and replace the editor camera |
+| `focus` | Optional `entity_id` (defaults to selection), `aspect` (defaults to 1) | Frame an entity using its scaled bounds, retaining viewing direction |
+| `pick` | `screen`: `[u,v]`, optional `aspect` (defaults to 1) | Select the nearest visible mesh triangle; return selection or null |
 
 Unknown fields/operations, duplicate JSON keys, nesting beyond 64 levels, and
 malformed values are rejected. Every mutation is
@@ -34,7 +45,32 @@ the same lifecycle. Simulation is synchronous; callers should impose process
 timeouts appropriate to trusted project size.
 Input actions use the contract in `docs/scripting.md`. Malformed actions reject
 the command without changing scene/history. For a persistent playable session,
-use the runtime's `--interactive` mode.
+use `play` followed by `tick`, or the runtime's `--interactive` mode.
+
+Play mode rejects authoring, history, selection, loading, and saving. `scene` always
+returns the authored document; `play_scene` reads the running copy. A script or
+physics failure ends the preview without changing authored data or history.
+Malformed tick arguments leave the preview running and do not advance it. `stop`
+is idempotent. A new play session starts fresh Lua and physics state.
+
+`batch` permits create/set/destroy/prefab/spawn/simulate only. Nested batches,
+file I/O, selection, history, and play commands are rejected. Any failure discards
+the whole candidate and preserves undo/redo. Selection clears on load/undo/redo
+and when its entity is destroyed. Selection does not create history.
+
+The dirty flag compares authored contents with the last successful load/save (or
+initial scene). Failed saves do not change it. Undo/redo can return to the saved
+contents. Successful save/load updates the current document path; undo changes
+contents while retaining that path.
+
+Camera navigation and picking share these commands with the graphical frontend.
+They do not alter scene contents, dirty state, or undo/redo. The editor view starts
+from the first scene camera, or an overview camera for empty documents. Loading
+resets it; undo/redo retain navigation. `set_view`, `focus`, and `pick` require edit
+mode. `view` also works during play and reports the retained authoring camera;
+play renders through the game camera. Picking coordinates use a top-left origin,
+normalized across the viewport, excluding panels. Out-of-viewport coordinates
+clear selection. Invalid requests preserve both view and selection.
 
 IDs are positive integers through `INT64_MAX`, scoped to a scene snapshot.
 Re-query IDs after undo/redo/load. Tools using JavaScript must preserve 64-bit
@@ -80,8 +116,11 @@ All numeric component values must be finite.
 Limits: 10000 entities, 10000 prefab definitions, 128-byte nonempty names without
 NUL, 1 MiB per script source, 16 MiB per input line or scene file. Large requests
 are consumed and rejected without losing the next protocol line. Scene save uses
-a same-filesystem temporary file and an exclusive hard link. Existing paths are
-never overwritten, including under competing writers. Filesystems without hard
+a same-filesystem temporary file and an exclusive hard link. By default existing paths are
+never overwritten, including under competing writers. Explicit `overwrite:true`
+uses same-filesystem atomic replacement (rename on Linux/macOS, MoveFileExW on
+Windows); readers observe a complete old or new file. Competing replacement
+writers are last-writer-wins. Replacement does not follow destination symlinks. Filesystems without hard
 links return an error. Publication is atomic, but power-loss durability (`fsync`)
 is not promised. Files are trusted local project files; paths are not sandboxed.
 
@@ -98,6 +137,6 @@ may have no collider, and an invisible sensor may have no mesh. Both work throug
 Defaults and bounds are in [graphics/physics contracts](graphics-physics.md).
 Discovery reports `physics:true`, `physics_backend:"Jolt"`, and `renderer:false`:
 the command editor simulates physics and authors meshes but does not own a viewport.
-Save to a new scene path and pass it to `vsim_game --scene PATH` to preview it.
+Save a scene path and pass it to `vsim_game --scene PATH` to preview it.
 Each editor simulation creates fresh Lua and native physics state from the scene,
 then records a single undo transaction. Runtime interactive sessions keep them live.

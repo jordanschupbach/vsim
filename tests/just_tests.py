@@ -61,7 +61,7 @@ add_custom_target(selected ALL
             (workspace / "examples").symlink_to(root / "examples", target_is_directory=True)
             binary_dir = workspace / "build/debug"
             binary_dir.mkdir(parents=True)
-            (binary_dir / "vsim_editor").symlink_to(Path(editor).resolve())
+            (binary_dir / "vsim_editor_cli").symlink_to(Path(editor).resolve())
             (binary_dir / "vsim_runtime").symlink_to(Path(runtime).resolve())
             # Parameters must be passed as arguments, not interpolated into shell code.
             path = workspace / "scene with 'quotes' $(touch SHOULD_NOT_EXIST).json"
@@ -69,7 +69,7 @@ add_custom_target(selected ALL
             commands = '\n'.join(json.dumps(r) for r in [
                 {"op": "scene"}, {"op": "simulate", "ticks": 1, "actions": {"move_x": 1}},
                 {"op": "scene"}, {"op": "undo"}, {"op": "scene"}]) + '\n'
-            result = subprocess.run([just, "--no-deps", "editor", str(path)], cwd=workspace,
+            result = subprocess.run([just, "--no-deps", "editor-cli", str(path)], cwd=workspace,
                                     input=commands, text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             responses = [json.loads(line) for line in result.stdout.splitlines()]

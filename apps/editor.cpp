@@ -36,17 +36,18 @@ int run(vsim::Editor& editor) {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--help") {
-            std::cout << "Usage: vsim_editor [--scene PATH] < requests.jsonl\n";
+            std::cout << "Usage: vsim_editor_cli [--scene PATH] < requests.jsonl\n";
             return 0;
         }
         if (argc != 1 && !(argc == 3 && std::string_view(argv[1]) == "--scene")) {
-            std::cerr << "Usage: vsim_editor [--scene PATH] < requests.jsonl\n";
+            std::cerr << "Usage: vsim_editor_cli [--scene PATH] < requests.jsonl\n";
             return 2;
         }
-        vsim::Editor editor(argc == 3 ? vsim::load_scene(argv[2]) : vsim::Scene{});
+        vsim::Editor editor(argc == 3 ? vsim::load_scene(argv[2]) : vsim::Scene{},
+                            argc == 3 ? argv[2] : "");
         return run(editor);
     } catch (const std::exception& error) {
-        std::cerr << "vsim_editor: " << error.what() << '\n';
+        std::cerr << "vsim_editor_cli: " << error.what() << '\n';
         return 1;
     }
 }

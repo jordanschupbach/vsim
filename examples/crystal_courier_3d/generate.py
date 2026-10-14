@@ -21,7 +21,8 @@ def generate(root):
     add("GameController", script={"source": (root / "game.lua").read_text(encoding="utf-8")})
     add("Status: Ready - collect five crystals")
     pitch = -math.atan2(19, 22)
-    camera = add("Camera", (0, 19, 22), camera={"vertical_fov": 48, "near_plane": 0.1, "far_plane": 150})
+    camera = add("Camera", (0, 19, 22), camera={"vertical_fov": 48, "near_plane": 0.1, "far_plane": 150},
+                 script={"source": (root / "camera.lua").read_text(encoding="utf-8")})
     camera["transform"]["rotation"] = [math.cos(pitch / 2), math.sin(pitch / 2), 0, 0]
     add("Island", (0, -0.65, 0), (20, 1.3, 16), (0.13, 0.22, 0.27), body={})
     # Slightly varied floor tiles provide scale and depth without external assets.

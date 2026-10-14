@@ -5,16 +5,39 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
+struct GLFWwindow;
+namespace nvrhi {
+class IDevice;
+}
+
 namespace vsim {
+struct RenderFrame;
+struct RenderView {
+    Transform transform;
+    Camera camera;
+    // Normalized top-left origin and extent within the output image.
+    glm::vec4 bounds{0, 0, 1, 1};
+    void validate() const;
+};
+struct AmbientOcclusion {
+    bool enabled{true};
+    float radius{1.0F}; // World-space meters.
+    float bias{0.035F};
+    float strength{1.5F};
+    bool visualize{false};
+    void validate() const;
+};
 struct RendererConfig {
     std::uint32_t width{1280};
     std::uint32_t height{800};
     bool offscreen{false};
     bool validation{false};
+    AmbientOcclusion ambient_occlusion{};
 };
 struct Image {
     std::uint32_t width;
@@ -34,7 +57,13 @@ class Renderer {
     [[nodiscard]] InputFrame poll_input();
     void set_title(const std::string& title);
     void set_overlay(std::string title, std::string status, std::string controls);
-    bool draw(const Scene& scene);
+    void set_ambient_occlusion(const AmbientOcclusion& settings);
+    bool draw(const Scene& scene, const RenderView* view = nullptr,
+              const std::function<void(const RenderFrame&)>& overlay = {});
+    // Borrowed main-thread handles. Extensions must release resources before Renderer.
+    [[nodiscard]] GLFWwindow* window() const noexcept;
+    [[nodiscard]] nvrhi::IDevice* graphics_device() const noexcept;
+    void wait_idle();
     void resize(std::uint32_t width, std::uint32_t height);
     [[nodiscard]] Image capture();
     [[nodiscard]] std::string device_name() const;

@@ -32,6 +32,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("rigid_body", response["result"]["components"])
         self.assertIn("mesh", response["result"]["components"])
         self.assertIn("apply_impulse", response["result"]["lua_api"])
+        self.assertIn("set_rotation", response["result"]["lua_api"])
 
     def test_physics_edits_simulation_undo_and_failed_edit(self):
         responses = self.run_requests([
@@ -174,6 +175,209 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(all(r["ok"] for r in responses[:65]))
         self.assertFalse(responses[65]["ok"])
         self.assertEqual(len(responses[66]["result"]["entities"]), 1)
+
+    def test_batch_is_one_undo_step_and_failure_preserves_redo(self):
+        responses = self.run_requests([
+            {"op": "batch", "commands": [
+                {"op": "create", "components": {"name": "A"}},
+                {"op": "create", "components": {"name": "B"}}]},
+            {"op": "undo"}, {"op": "scene"},
+            {"op": "batch", "commands": [
+                {"op": "create", "components": {"name": "Discard"}},
+                {"op": "destroy", "entity_id": 99}]},
+            {"op": "redo"}, {"op": "scene"},
+        ])
+        self.assertTrue(responses[0]["ok"])
+        self.assertEqual([r["entity_id"] for r in responses[0]["result"]], [1, 2])
+        self.assertEqual(responses[2]["result"]["entities"], [])
+        self.assertFalse(responses[3]["ok"])
+        self.assertTrue(responses[4]["ok"])
+        self.assertEqual([e["components"]["name"] for e in responses[5]["result"]["entities"]], ["A", "B"])
+
+    def test_batch_rejects_nontransactional_commands_and_bad_limits(self):
+        requests = [{"op": "batch", "commands": x} for x in [[], {}, [{}] * 1025]]
+        requests += [{"op": "batch", "commands": [{"op": op}]} for op in
+                     ["batch", "save", "load", "undo", "redo", "select", "play", "tick", "stop"]]
+        responses = self.run_requests(requests + [{"op": "status"}])
+        self.assertTrue(all(not r["ok"] for r in responses[:-1]))
+        self.assertFalse(responses[-1]["result"]["can_undo"])
+        self.assertFalse(responses[-1]["result"]["dirty"])
+
+    def test_selection_is_validated_and_cleared_on_snapshot_replacement(self):
+        responses = self.run_requests([
+            {"op": "create", "components": {}}, {"op": "select", "entity_id": 1},
+            {"op": "select", "entity_id": 2}, {"op": "status"},
+            {"op": "destroy", "entity_id": 1}, {"op": "status"},
+            {"op": "undo"}, {"op": "select", "entity_id": 1},
+            {"op": "undo"}, {"op": "status"}, {"op": "select", "entity_id": None},
+        ])
+        self.assertFalse(responses[2]["ok"])
+        self.assertEqual(responses[3]["result"]["selection"], 1)
+        self.assertIsNone(responses[5]["result"]["selection"])
+        self.assertIsNone(responses[9]["result"]["selection"])
+        self.assertTrue(responses[10]["ok"])
+
+    def test_play_preserves_authored_scene_history_and_persistent_lua_state(self):
+        responses = self.run_requests([
+            {"op": "create", "components": {"script": {"source":
+             "local n=0; function on_update(self) n=n+1; engine.set_position(self,n,engine.input('axis'),0) end"}}},
+            {"op": "scene"}, {"op": "play"}, {"op": "tick", "ticks": 2},
+            {"op": "tick", "ticks": 1, "actions": {"axis": 0.5}},
+            {"op": "play_scene"}, {"op": "scene"}, {"op": "stop"},
+            {"op": "undo"}, {"op": "scene"}, {"op": "redo"},
+            {"op": "play"}, {"op": "tick", "ticks": 1}, {"op": "play_scene"},
+        ])
+        self.assertTrue(all(r["ok"] for r in responses))
+        self.assertEqual(responses[1]["result"], responses[6]["result"])
+        self.assertEqual(responses[5]["result"]["entities"][0]["components"]["transform"]["position"], [3, 0.5, 0])
+        self.assertEqual(responses[9]["result"]["entities"], [])
+        self.assertEqual(responses[13]["result"]["entities"][0]["components"]["transform"]["position"][0], 1)
+
+    def test_play_rejects_editing_and_malformed_ticks_without_advancing(self):
+        responses = self.run_requests([
+            {"op": "play"}, {"op": "create", "components": {}}, {"op": "undo"},
+            {"op": "save", "path": "unused"}, {"op": "tick", "ticks": 0},
+            {"op": "tick", "ticks": 1, "actions": {"axis": 2}},
+            {"op": "status"}, {"op": "play_scene"}, {"op": "stop"},
+            {"op": "tick", "ticks": 1}, {"op": "play_scene"},
+        ])
+        self.assertTrue(all(not r["ok"] for r in responses[1:6]))
+        self.assertTrue(responses[6]["result"]["playing"])
+        self.assertFalse(responses[6]["result"]["dirty"])
+        self.assertEqual(responses[7]["result"]["entities"], [])
+        self.assertFalse(responses[9]["ok"])
+        self.assertFalse(responses[10]["ok"])
+
+    def test_play_failure_stops_preview_and_preserves_authoring(self):
+        responses = self.run_requests([
+            {"op": "create", "components": {"script": {"source":
+             "function on_update(self) engine.create('discard'); error('preview failed') end"}}},
+            {"op": "scene"}, {"op": "play"}, {"op": "tick", "ticks": 1},
+            {"op": "status"}, {"op": "scene"}, {"op": "undo"}, {"op": "scene"},
+        ])
+        self.assertFalse(responses[3]["ok"])
+        self.assertIn("preview failed", responses[3]["error"])
+        self.assertFalse(responses[4]["result"]["playing"])
+        self.assertEqual(responses[1]["result"], responses[5]["result"])
+        self.assertEqual(responses[7]["result"]["entities"], [])
+
+    def test_save_replacement_and_dirty_state_follow_saved_contents(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "game.json")
+            responses = self.run_requests([
+                {"op": "create", "components": {"name": "Original"}},
+                {"op": "save", "path": path}, {"op": "status"},
+                {"op": "set", "entity_id": 1, "components": {"name": "Edited"}},
+                {"op": "status"}, {"op": "save", "path": path}, {"op": "status"},
+                {"op": "save", "path": path, "overwrite": True}, {"op": "status"},
+                {"op": "undo"}, {"op": "status"}, {"op": "redo"}, {"op": "status"},
+            ])
+            self.assertFalse(responses[2]["result"]["dirty"])
+            self.assertTrue(responses[4]["result"]["dirty"])
+            self.assertFalse(responses[5]["ok"])
+            self.assertTrue(responses[6]["result"]["dirty"])
+            self.assertTrue(responses[7]["ok"])
+            self.assertFalse(responses[8]["result"]["dirty"])
+            self.assertEqual(responses[8]["result"]["path"], path)
+            self.assertTrue(responses[10]["result"]["dirty"])
+            self.assertFalse(responses[12]["result"]["dirty"])
+            self.assertEqual(json.loads(Path(path).read_text())["entities"][0]["components"]["name"], "Edited")
+            self.assertEqual(list(Path(folder).iterdir()), [Path(path)])
+
+    def test_failed_replacement_preserves_destination_and_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "directory"
+            path.mkdir()
+            responses = self.run_requests([
+                {"op": "create", "components": {}},
+                {"op": "save", "path": str(path), "overwrite": True},
+                {"op": "status"}, {"op": "undo"}, {"op": "scene"},
+            ])
+            self.assertFalse(responses[1]["ok"])
+            self.assertTrue(responses[2]["result"]["dirty"])
+            self.assertEqual(responses[2]["result"]["path"], "")
+            self.assertEqual(responses[4]["result"]["entities"], [])
+            self.assertTrue(path.is_dir())
+            self.assertEqual(list(Path(folder).iterdir()), [path])
+
+    def test_explicit_replacement_does_not_write_through_symlinks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "target.txt"
+            target.write_text("keep this file")
+            path = Path(folder) / "scene.json"
+            path.symlink_to(target)
+            responses = self.run_requests([
+                {"op": "create", "components": {"name": "Replacement"}},
+                {"op": "save", "path": str(path), "overwrite": True},
+            ])
+            self.assertTrue(responses[1]["ok"])
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(target.read_text(), "keep this file")
+            self.assertEqual(json.loads(path.read_text())["entities"][0]["components"]["name"], "Replacement")
+
+    def test_view_commands_and_picking_are_shared_without_scene_mutation(self):
+        view = {"transform": {"position": [0, 0, 5]}, "camera": {"far_plane": 100}}
+        responses = self.run_requests([
+            {"op": "create", "components": {"mesh": {"primitive": "box"}}},
+            {"op": "scene"}, {"op": "set_view", **view},
+            {"op": "pick", "screen": [0.5, 0.5]}, {"op": "status"},
+            {"op": "focus", "aspect": 0.5}, {"op": "view"}, {"op": "scene"},
+            {"op": "undo"}, {"op": "scene"}, {"op": "view"},
+        ])
+        self.assertTrue(all(r["ok"] for r in responses))
+        self.assertEqual(responses[3]["result"]["selection"], 1)
+        self.assertEqual(responses[4]["result"]["selection"], 1)
+        self.assertEqual(responses[1]["result"], responses[7]["result"])
+        self.assertEqual(responses[9]["result"]["entities"], [])
+        self.assertEqual(responses[6]["result"], responses[10]["result"])
+        self.assertGreater(responses[6]["result"]["transform"]["position"][2], 3)
+
+    def test_invalid_navigation_preserves_view_selection_and_history(self):
+        initial = {"transform": {"position": [0, 0, 5]}, "camera": {}}
+        invalid = [
+            {"op": "set_view", "transform": {"scale": [0, 1, 1]}, "camera": {}},
+            {"op": "set_view", "transform": {}, "camera": {"near_plane": -1}},
+            {"op": "set_view", "transform": {}, "camera": None},
+            {"op": "focus", "entity_id": 99},
+            {"op": "focus", "aspect": 0}, {"op": "focus", "aspect": True},
+            {"op": "pick", "screen": [0.5]}, {"op": "pick", "screen": [True, 0.5]},
+            {"op": "pick", "screen": [1e300, 0.5]},
+            {"op": "pick", "screen": [0.5, 0.5], "aspect": -1},
+        ]
+        responses = self.run_requests([
+            {"op": "create", "components": {"mesh": {}}},
+            {"op": "set_view", **initial}, {"op": "view"},
+            {"op": "select", "entity_id": 1}, *invalid,
+            {"op": "view"}, {"op": "status"},
+            {"op": "pick", "screen": [-1, 0]}, {"op": "status"},
+            {"op": "undo"}, {"op": "scene"},
+        ])
+        self.assertTrue(all(not r["ok"] for r in responses[4:4 + len(invalid)]))
+        self.assertEqual(responses[2]["result"], responses[-6]["result"])
+        self.assertEqual(responses[-5]["result"]["selection"], 1)
+        self.assertIsNone(responses[-3]["result"]["selection"])
+        self.assertEqual(responses[-1]["result"]["entities"], [])
+
+    def test_view_initializes_from_scene_camera_and_resets_on_load(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "camera.json"
+            path.write_text(json.dumps({"version": 1, "entities": [
+                {"id": 1, "components": {"camera": {"vertical_fov": 75},
+                                          "transform": {"position": [2, 3, 4]}}}]}))
+            responses = self.run_requests([
+                {"op": "load", "path": str(path)}, {"op": "view"},
+                {"op": "set_view", "transform": {}, "camera": {}},
+                {"op": "status"}, {"op": "load", "path": str(path)}, {"op": "view"},
+                {"op": "play"}, {"op": "view"},
+                {"op": "set_view", "transform": {}, "camera": {}},
+                {"op": "focus", "entity_id": 1}, {"op": "pick", "screen": [0.5, 0.5]},
+            ])
+            self.assertFalse(responses[3]["result"]["dirty"])
+            self.assertEqual(responses[1]["result"], responses[5]["result"])
+            self.assertEqual(responses[1]["result"]["camera"]["vertical_fov"], 75)
+            self.assertEqual(responses[1]["result"]["transform"]["position"], [2, 3, 4])
+            self.assertEqual(responses[1]["result"], responses[7]["result"])
+            self.assertTrue(all(not r["ok"] for r in responses[8:]))
 
     def test_runtime_rejects_invalid_cli(self):
         for arguments in [[], ["--ticks", "-1"], ["--ticks", "2.5"], ["--ticks", "0"],

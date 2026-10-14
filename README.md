@@ -9,7 +9,7 @@ the full production engine described in `initial_prompt.md` is still in developm
 
 ```sh
 nix develop          # Or use the .envrc with direnv allow
-just deps            # Fetch pinned sources once; already done in this workspace
+just deps            # Fetch/update the pinned sources
 just game            # Build and open Crystal Courier 3D
 ```
 
@@ -17,7 +17,7 @@ Move the pink courier with **WASD / arrow keys**, **Space** to jump, **R** to re
 and **Escape** to quit. Collect five turquoise crystals and enter the golden portal.
 Jump onto the raised platform, push crates, ride the lift, and avoid the orange hazard.
 The game has actual 3D meshes, perspective/depth rendering, metallic/roughness
-materials, filtered directional shadows, HDR tonemapping, and Jolt rigid bodies.
+materials, filtered directional shadows, SSAO, HDR tonemapping, and Jolt rigid bodies.
 Gameplay runs in Lua at 60 Hz. See [the example](examples/crystal_courier_3d/README.md).
 
 `just game --validate` additionally enables NVRHI and Vulkan validation. A Vulkan
@@ -26,13 +26,21 @@ an explicit offscreen mode for testing and agent screenshots:
 
 ```sh
 just game --offscreen --frames 120 --validate --capture build/courier.ppm
-just editor          # JSON command editor, preloaded with the 3D scene
+just game --show-ssao # Inspect ambient occlusion; --no-ssao disables the effect
+just editor-cli      # JSON command service, preloaded with the 3D scene
 just game-cli        # Original terminal example, retained for headless work
 ```
 
-The editor currently exposes a JSON command interface; its graphical viewport and
-transform gizmos remain future work. An agent can author mesh/body/material/script
-components, simulate physics, save a scene, and preview it with `vsim_game --scene PATH`.
+Run `just editor` to open the graphical editor with the same 3D scene. It includes
+an entity hierarchy, component inspector, move/rotate/scale gizmos, prefabs,
+undo/redo, saving, and isolated play/stop previews. Use RMB + WASD/QE to fly the
+editor camera, the wheel to dolly, and F to focus the selected entity. See the
+[editor guide](docs/editor.md) for authoring and agent automation.
+
+The editor has passed offscreen Vulkan rendering, mouse interaction, and sanitizer
+tests. Desktop presentation, high-DPI behavior, and physical GPU coverage still
+need validation on accessible hosts. `just editor-cli` remains the JSON command
+service for headless authoring.
 
 ## Development commands
 
@@ -44,7 +52,8 @@ the same pinned revisions and source hashes from `dependencies.json`.
 | Command | Action |
 |---|---|
 | `just game [arguments...]` / `just run` | Build and launch Crystal Courier 3D |
-| `just editor [scene.json]` | Open the command editor with the scene loaded |
+| `just editor [scene.json] [arguments...]` | Build/open the graphical scene editor |
+| `just editor-cli [scene.json]` | Open the tested JSON command service |
 | `just game-cli` | Run the terminal example |
 | `just build [preset]` | Configure and compile debug, asan, or release |
 | `just rebuild [preset]` | Reset cached toolchain/dependency paths and rebuild |
@@ -66,7 +75,8 @@ An ordinary CMake environment needs a C++20 compiler, CMake 3.25+, Ninja, GLM 1.
 nlohmann JSON 3.11+, Lua 5.4, GLFW 3.4, Vulkan loader 1.3+, `glslc`, Python 3.10+,
 clang-format, and `just`, plus the pinned sources fetched with `just deps`.
 For a fully headless build, configure with `-DVSIM_BUILD_3D=OFF` and
-`-DVSIM_BUILD_PLATFORM_PROBE=OFF`; Jolt physics and core tests still run. GPU tests
+`-DVSIM_BUILD_PLATFORM_PROBE=OFF`; Jolt physics and core tests still run. To build the command editor without the GUI, set
+`-DVSIM_BUILD_EDITOR_GUI=OFF`. `just editor` explicitly reenables it. GPU tests
 are labeled `gpu`. Excluding them does not establish renderer correctness.
 
 The flake pins nixpkgs in `flake.lock`. In an untracked initial checkout, use
@@ -75,7 +85,7 @@ execution remains unverified in this restricted session; see [validation](docs/v
 
 ## Agent editing and runtime separation
 
-`vsim_editor` accepts one JSON request per line, exposes discovery with
+`vsim_editor_cli` accepts one JSON request per line, exposes discovery with
 `{"op":"describe"}`, and supports transactional scene changes, simulation,
 undo/redo, prefabs, and saving. See [the protocol](docs/editor-protocol.md) and
 [Lua API](docs/scripting.md). `vsim_runtime --interactive` provides persistent
@@ -93,6 +103,6 @@ development installation: Nix binaries need their runtime closure. Portable game
 export and clean-machine distribution validation remain future work.
 
 The current renderer uses procedural geometry and a fixed directional light.
-glTF/textures, HDRI/IBL, SSAO, audio, graphical editing, and Windows/macOS validation
-are not implemented. See [status and release gates](docs/status.md),
+glTF/textures, HDRI/IBL, audio, and Windows/macOS validation remain outstanding.
+See [status and release gates](docs/status.md),
 [renderer/physics contracts](docs/graphics-physics.md), and [AGENTS.md](AGENTS.md).

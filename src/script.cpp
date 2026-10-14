@@ -133,6 +133,15 @@ int set_position(lua_State* state) {
     return 0;
 }
 
+int set_rotation(lua_State* state) {
+    const auto id = id_arg(state, 1);
+    auto entity = context(state).scene->get(id);
+    entity.transform.rotation = {float_arg(state, 2), float_arg(state, 3), float_arg(state, 4),
+                                 float_arg(state, 5)};
+    context(state).scene->set(id, std::move(entity));
+    return 0;
+}
+
 int spawn(lua_State* state) {
     const auto id = context(state).scene->spawn(string_arg(state, 1));
     lua_pushinteger(state, static_cast<lua_Integer>(id));
@@ -224,6 +233,7 @@ const luaL_Reg bindings[] = {{"create", boundary<create>},
                              {"set", boundary<set>},
                              {"position", boundary<position>},
                              {"set_position", boundary<set_position>},
+                             {"set_rotation", boundary<set_rotation>},
                              {"spawn", boundary<spawn>},
                              {"define_prefab", boundary<define_prefab>},
                              {"linear_velocity", boundary<linear_velocity>},

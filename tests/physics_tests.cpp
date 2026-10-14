@@ -326,6 +326,68 @@ int main() {
         step(simulation, 1);
         CHECK(simulation.physics().body_count() == 0 && scene.size() == 1);
     });
+    test("example camera orbits continuously with stable aim and retains its components", [] {
+        const auto original = game_scene();
+        const auto camera = original.get(named(original, "Camera"));
+        CHECK(camera.camera && camera.script);
+        Scene scene;
+        const auto id = scene.create(camera);
+        Simulation simulation(scene);
+        auto expected = camera;
+        glm::vec3 first_position{};
+        for (int tick = 1; tick <= 3600; ++tick) {
+            simulation.tick(1.0 / 60);
+            const auto& current = scene.get(id);
+            const auto& transform = current.transform;
+            near(glm::length(glm::vec2(transform.position.x, transform.position.z)), 22, 0.0001F);
+            near(transform.position.y, 19, 0.0001F);
+            near(glm::length(transform.rotation), 1, 0.0001F);
+            CHECK(glm::dot(transform.rotation * glm::vec3(0, 0, -1),
+                           glm::normalize(-transform.position)) > 0.99999F);
+            CHECK((transform.rotation * glm::vec3(0, 1, 0)).y > 0);
+            if (tick == 1)
+                first_position = transform.position;
+            if (tick % 30 == 0) {
+                // The whole floor fits both the game window and the narrower
+                // default editor viewport, including diagonal orbit angles.
+                const auto view = glm::inverse(transform.matrix());
+                for (const auto aspect : {1.6F, 720.0F / 678.0F}) {
+                    const auto projection = current.camera->projection(aspect);
+                    for (const auto x : {-10.0F, 10.0F})
+                        for (const auto z : {-8.0F, 8.0F}) {
+                            const auto clip = projection * view * glm::vec4(x, 0, z, 1);
+                            CHECK(clip.w > 0);
+                            CHECK(std::abs(clip.x) < clip.w && std::abs(clip.y) < clip.w);
+                            CHECK(clip.z > 0 && clip.z < clip.w);
+                        }
+                }
+            }
+            expected.transform = transform;
+            CHECK(entity_json(current) == entity_json(expected));
+            if (tick == 900) {
+                near(transform.position.x, 22, 0.0001F);
+                near(transform.position.z, 0, 0.0001F);
+            }
+        }
+        CHECK(glm::length(scene.get(id).transform.position - camera.transform.position) < 0.0001F);
+        CHECK(std::abs(glm::dot(scene.get(id).transform.rotation, camera.transform.rotation)) >
+              0.99999F);
+        simulation.tick(1.0 / 60);
+        CHECK(glm::length(scene.get(id).transform.position - first_position) < 0.0001F);
+        // New play sessions restart the orbit; equal elapsed time gives equal
+        // poses even when the simulation uses different supported time steps.
+        Scene first, second;
+        const auto a = first.create(camera), b = second.create(camera);
+        Simulation normal(first), coarse(second);
+        for (int tick = 0; tick < 120; ++tick)
+            normal.tick(1.0 / 60);
+        for (int tick = 0; tick < 60; ++tick)
+            coarse.tick(1.0 / 30);
+        CHECK(glm::length(first.get(a).transform.position - second.get(b).transform.position) <
+              0.0001F);
+        CHECK(std::abs(glm::dot(first.get(a).transform.rotation,
+                                second.get(b).transform.rotation)) > 0.99999F);
+    });
     test("3D game supports continuous movement grounded jumping and no double jump", [] {
         auto scene = game_scene();
         const auto player = named(scene, "Player");

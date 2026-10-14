@@ -1,5 +1,6 @@
 #include <vsim/mesh.hpp>
 #include <vsim/renderer.hpp>
+#include <vsim/renderer_extension.hpp>
 
 #include <nvrhi/validation.h>
 #include <nvrhi/vulkan.h>
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -401,16 +403,22 @@ struct FrameData {
     glm::vec4 camera;
     glm::vec4 sun_direction;
     glm::vec4 sun_color;
+    glm::mat4 inverse_view_projection;
+    glm::vec4 viewport_bounds;
 };
 struct ObjectData {
     glm::mat4 model;
     glm::vec4 color;
     glm::vec4 material;
 };
-static_assert(sizeof(FrameData) == 176 && sizeof(ObjectData) == 96);
+static_assert(sizeof(FrameData) == 256 && sizeof(ObjectData) == 96);
 
 struct Frame {
-    nvrhi::TextureHandle shadow, depth, hdr, output;
+    nvrhi::TextureHandle shadow, depth, hdr, ambient, normals, output;
+    std::array<nvrhi::TextureHandle, 3> ao;
+    std::array<nvrhi::FramebufferHandle, 3> ao_fb;
+    nvrhi::BindingSetHandle ao_bindings;
+    std::array<nvrhi::BindingSetHandle, 2> blur_bindings;
     nvrhi::FramebufferHandle shadow_fb, scene_fb, output_fb;
     nvrhi::BufferHandle constants, overlay;
     nvrhi::BindingSetHandle shadow_bindings, scene_bindings, tone_bindings;
@@ -420,13 +428,14 @@ struct Frame {
 };
 struct Resources {
     nvrhi::ShaderHandle scene_vs, scene_ps, shadow_vs, fullscreen_vs, tone_ps, overlay_vs,
-        overlay_ps;
+        overlay_ps, ao_ps, blur_ps;
     nvrhi::InputLayoutHandle input_layout, shadow_input_layout, overlay_input_layout;
     nvrhi::BufferHandle vertices;
     std::map<std::string, nvrhi::DrawArguments> meshes;
-    nvrhi::BindingLayoutHandle shadow_layout, scene_layout, tone_layout;
-    nvrhi::SamplerHandle shadow_sampler, linear_sampler;
-    nvrhi::GraphicsPipelineHandle shadow_pipeline, scene_pipeline, tone_pipeline, overlay_pipeline;
+    nvrhi::BindingLayoutHandle shadow_layout, scene_layout, tone_layout, ao_layout, blur_layout;
+    nvrhi::SamplerHandle shadow_sampler, linear_sampler, nearest_sampler;
+    nvrhi::GraphicsPipelineHandle shadow_pipeline, scene_pipeline, tone_pipeline, overlay_pipeline,
+        ao_pipeline, blur_pipeline;
     std::vector<Frame> frames;
     std::vector<nvrhi::TextureHandle> swap_images;
     std::vector<bool> presented;
@@ -464,6 +473,7 @@ struct Renderer::Impl {
         if (options.width < 64 || options.height < 64 || options.width > 4096 ||
             options.height > 4096)
             throw std::invalid_argument("render dimensions must be in [64,4096]");
+        options.ambient_occlusion.validate();
         config = options;
         vk.initialize(config);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vk.instance, vkGetInstanceProcAddr, vk.device);
@@ -497,6 +507,8 @@ struct Renderer::Impl {
         r.shadow_vs = shader(nvrhi::ShaderType::Vertex, shaders::shadow_vert_spv);
         r.fullscreen_vs = shader(nvrhi::ShaderType::Vertex, shaders::fullscreen_vert_spv);
         r.tone_ps = shader(nvrhi::ShaderType::Pixel, shaders::tonemap_frag_spv);
+        r.ao_ps = shader(nvrhi::ShaderType::Pixel, shaders::ssao_frag_spv);
+        r.blur_ps = shader(nvrhi::ShaderType::Pixel, shaders::ssao_blur_frag_spv);
         r.overlay_vs = shader(nvrhi::ShaderType::Vertex, shaders::overlay_vert_spv);
         r.overlay_ps = shader(nvrhi::ShaderType::Pixel, shaders::overlay_frag_spv);
         const std::array overlay_attributes = {nvrhi::VertexAttributeDesc()
@@ -558,14 +570,25 @@ struct Renderer::Impl {
         layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_SRV(0));
         layout.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(0));
         r.scene_layout = required(device->createBindingLayout(layout), "scene layout");
-        layout.bindings = {nvrhi::BindingLayoutItem::Texture_SRV(0),
-                           nvrhi::BindingLayoutItem::Sampler(0),
-                           nvrhi::BindingLayoutItem::PushConstants(0, sizeof(glm::vec4))};
+        layout.bindings = {
+            nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1),
+            nvrhi::BindingLayoutItem::Texture_SRV(2), nvrhi::BindingLayoutItem::Sampler(0),
+            nvrhi::BindingLayoutItem::PushConstants(0, sizeof(glm::vec4))};
         r.tone_layout = required(device->createBindingLayout(layout), "tonemap layout");
+        layout.bindings = {nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                           nvrhi::BindingLayoutItem::PushConstants(1, sizeof(glm::vec4)),
+                           nvrhi::BindingLayoutItem::Texture_SRV(0),
+                           nvrhi::BindingLayoutItem::Texture_SRV(1),
+                           nvrhi::BindingLayoutItem::Sampler(0)};
+        r.ao_layout = required(device->createBindingLayout(layout), "SSAO layout");
+        layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_SRV(2));
+        r.blur_layout = required(device->createBindingLayout(layout), "SSAO blur layout");
         r.shadow_sampler = required(device->createSampler(nvrhi::SamplerDesc().setReductionType(
                                         nvrhi::SamplerReductionType::Comparison)),
                                     "shadow sampler");
         r.linear_sampler = required(device->createSampler(nvrhi::SamplerDesc()), "linear sampler");
+        r.nearest_sampler = required(
+            device->createSampler(nvrhi::SamplerDesc().setAllFilters(false)), "nearest sampler");
         create_targets();
         nvrhi::GraphicsPipelineDesc pipeline;
         pipeline.inputLayout = r.shadow_input_layout;
@@ -596,6 +619,16 @@ struct Renderer::Impl {
         r.tone_pipeline = required(
             device->createGraphicsPipeline(pipeline, r.frames[0].output_fb->getFramebufferInfo()),
             "tonemap pipeline");
+        pipeline.PS = r.ao_ps;
+        pipeline.bindingLayouts = {r.ao_layout};
+        r.ao_pipeline = required(
+            device->createGraphicsPipeline(pipeline, r.frames[0].ao_fb[0]->getFramebufferInfo()),
+            "SSAO pipeline");
+        pipeline.PS = r.blur_ps;
+        pipeline.bindingLayouts = {r.blur_layout};
+        r.blur_pipeline = required(
+            device->createGraphicsPipeline(pipeline, r.frames[0].ao_fb[1]->getFramebufferInfo()),
+            "SSAO blur pipeline");
         pipeline.VS = r.overlay_vs;
         pipeline.PS = r.overlay_ps;
         pipeline.inputLayout = r.overlay_input_layout;
@@ -626,6 +659,19 @@ struct Renderer::Impl {
                                  vk.extent.height, nvrhi::ResourceStates::DepthWrite);
             frame.hdr = target("HDR scene", nvrhi::Format::RGBA16_FLOAT, vk.extent.width,
                                vk.extent.height, nvrhi::ResourceStates::ShaderResource);
+            frame.ambient = target("Indirect light", nvrhi::Format::RGBA16_FLOAT, vk.extent.width,
+                                   vk.extent.height, nvrhi::ResourceStates::ShaderResource);
+            frame.normals = target("World normals", nvrhi::Format::RGBA16_FLOAT, vk.extent.width,
+                                   vk.extent.height, nvrhi::ResourceStates::ShaderResource);
+            for (std::size_t index = 0; index < frame.ao.size(); ++index) {
+                frame.ao[index] =
+                    target("Ambient occlusion", nvrhi::Format::R16_FLOAT, vk.extent.width,
+                           vk.extent.height, nvrhi::ResourceStates::ShaderResource);
+                frame.ao_fb[index] =
+                    required(device->createFramebuffer(
+                                 nvrhi::FramebufferDesc().addColorAttachment(frame.ao[index])),
+                             "SSAO framebuffer");
+            }
             frame.output =
                 target("Tone-mapped output", nvrhi::Format::SBGRA8_UNORM, vk.extent.width,
                        vk.extent.height, nvrhi::ResourceStates::CopySource);
@@ -633,11 +679,13 @@ struct Renderer::Impl {
                 required(device->createFramebuffer(
                              nvrhi::FramebufferDesc().setDepthAttachment(frame.shadow)),
                          "shadow framebuffer");
-            frame.scene_fb = required(
-                device->createFramebuffer(
-                    nvrhi::FramebufferDesc().addColorAttachment(frame.hdr).setDepthAttachment(
-                        frame.depth)),
-                "scene framebuffer");
+            frame.scene_fb =
+                required(device->createFramebuffer(nvrhi::FramebufferDesc()
+                                                       .addColorAttachment(frame.hdr)
+                                                       .addColorAttachment(frame.ambient)
+                                                       .addColorAttachment(frame.normals)
+                                                       .setDepthAttachment(frame.depth)),
+                         "scene framebuffer");
             frame.output_fb =
                 required(device->createFramebuffer(
                              nvrhi::FramebufferDesc().addColorAttachment(frame.output)),
@@ -666,7 +714,22 @@ struct Renderer::Impl {
             bindings.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, r.shadow_sampler));
             frame.scene_bindings =
                 required(device->createBindingSet(bindings, r.scene_layout), "scene bindings");
+            bindings.bindings = {nvrhi::BindingSetItem::ConstantBuffer(0, frame.constants),
+                                 nvrhi::BindingSetItem::PushConstants(1, sizeof(glm::vec4)),
+                                 nvrhi::BindingSetItem::Texture_SRV(0, frame.depth),
+                                 nvrhi::BindingSetItem::Texture_SRV(1, frame.normals),
+                                 nvrhi::BindingSetItem::Sampler(0, r.nearest_sampler)};
+            frame.ao_bindings =
+                required(device->createBindingSet(bindings, r.ao_layout), "SSAO bindings");
+            bindings.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(2, frame.ao[0]));
+            frame.blur_bindings[0] = required(device->createBindingSet(bindings, r.blur_layout),
+                                              "horizontal SSAO blur bindings");
+            bindings.bindings.back() = nvrhi::BindingSetItem::Texture_SRV(2, frame.ao[1]);
+            frame.blur_bindings[1] = required(device->createBindingSet(bindings, r.blur_layout),
+                                              "vertical SSAO blur bindings");
             bindings.bindings = {nvrhi::BindingSetItem::Texture_SRV(0, frame.hdr),
+                                 nvrhi::BindingSetItem::Texture_SRV(1, frame.ambient),
+                                 nvrhi::BindingSetItem::Texture_SRV(2, frame.ao[2]),
                                  nvrhi::BindingSetItem::Sampler(0, r.linear_sampler),
                                  nvrhi::BindingSetItem::PushConstants(0, sizeof(glm::vec4))};
             frame.tone_bindings =
@@ -700,24 +763,34 @@ struct Renderer::Impl {
         create_targets();
         recreate = false;
     }
-    FrameData frame_data(const Scene& scene) const {
+    FrameData frame_data(const Scene& scene, const RenderView* override_view) const {
         const Entity* camera = nullptr;
         for (auto id : scene.entities())
             if (scene.get(id).camera) {
                 camera = &scene.get(id);
                 break;
             }
-        if (!camera)
+        if (!camera && !override_view)
             throw std::invalid_argument("rendered scene needs a camera entity");
         FrameData data{};
-        const auto view = glm::mat4_cast(glm::conjugate(camera->transform.rotation)) *
-                          glm::translate(glm::mat4(1), -camera->transform.position);
-        auto camera_projection = camera->camera->projection(static_cast<float>(vk.extent.width) /
-                                                            static_cast<float>(vk.extent.height));
+        const auto& transform = override_view ? override_view->transform : camera->transform;
+        const auto& lens = override_view ? override_view->camera : *camera->camera;
+        const auto bounds = override_view ? override_view->bounds : glm::vec4(0, 0, 1, 1);
+        const auto view = glm::mat4_cast(glm::conjugate(transform.rotation)) *
+                          glm::translate(glm::mat4(1), -transform.position);
+        auto camera_projection = lens.projection(static_cast<float>(vk.extent.width) * bounds.z /
+                                                 (static_cast<float>(vk.extent.height) * bounds.w));
         camera_projection[1][1] *=
             -1; // Camera::projection targets a positive-height Vulkan viewport.
         data.view_projection = camera_projection * view;
-        data.camera = glm::vec4(camera->transform.position, 1);
+        data.inverse_view_projection = glm::inverse(data.view_projection);
+        data.viewport_bounds = bounds;
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                if (!std::isfinite(data.view_projection[column][row]) ||
+                    !std::isfinite(data.inverse_view_projection[column][row]))
+                    throw std::invalid_argument("camera exceeds renderer projection precision");
+        data.camera = glm::vec4(transform.position, 1);
         data.sun_direction = glm::vec4(glm::normalize(glm::vec3(-0.5F, 0.85F, 0.4F)), 0);
         data.sun_color = {3.8F, 3.5F, 3.0F, 1};
         auto projection = glm::orthoRH_ZO(-18.0F, 18.0F, -18.0F, 18.0F, 0.1F, 70.0F);
@@ -739,7 +812,10 @@ struct Renderer::Impl {
             commands->draw(resources->meshes.at(mesh.primitive));
         }
     }
-    bool draw(const Scene& scene) {
+    bool draw(const Scene& scene, const RenderView* view,
+              const std::function<void(const RenderFrame&)>& extension) {
+        if (view)
+            view->validate();
         if (vk.window) {
             int width = 0, height = 0;
             glfwGetFramebufferSize(vk.window, &width, &height);
@@ -751,7 +827,7 @@ struct Renderer::Impl {
                 static_cast<std::uint32_t>(height) != vk.extent.height)
                 resize_targets();
         }
-        const auto data = frame_data(scene);
+        const auto data = frame_data(scene, view);
         auto& r = *resources;
         auto& frame = r.frames[frame_index];
         if (frame.submitted) {
@@ -787,19 +863,53 @@ struct Renderer::Impl {
         draw_entities(commands, scene);
         commands->clearDepthStencilTexture(frame.depth, nvrhi::AllSubresources, true, 1, false, 0);
         commands->clearTextureFloat(frame.hdr, nvrhi::AllSubresources, nvrhi::Color(0, 0, 0, 0));
+        commands->clearTextureFloat(frame.ambient, nvrhi::AllSubresources,
+                                    nvrhi::Color(0, 0, 0, 0));
+        commands->clearTextureFloat(frame.normals, nvrhi::AllSubresources,
+                                    nvrhi::Color(0, 0, 0, 0));
         state.pipeline = r.scene_pipeline;
         state.framebuffer = frame.scene_fb;
         state.bindings = {frame.scene_bindings};
         state.viewport = viewport(vk.extent.width, vk.extent.height);
+        if (view) {
+            const auto b = view->bounds;
+            const auto width = static_cast<float>(vk.extent.width);
+            const auto height = static_cast<float>(vk.extent.height);
+            state.viewport = {};
+            state.viewport.addViewportAndScissorRect(nvrhi::Viewport(
+                b.x * width, (b.x + b.z) * width, b.y * height, (b.y + b.w) * height, 0, 1));
+        }
         commands->setGraphicsState(state);
         draw_entities(commands, scene);
         state = {};
+        state.viewport = viewport(vk.extent.width, vk.extent.height);
+        const auto& ao = config.ambient_occlusion;
+        if (ao.enabled && ao.strength > 0) {
+            state.pipeline = r.ao_pipeline;
+            state.framebuffer = frame.ao_fb[0];
+            state.bindings = {frame.ao_bindings};
+            commands->setGraphicsState(state);
+            glm::vec4 ao_settings(ao.radius, ao.bias, ao.strength, 0);
+            commands->setPushConstants(&ao_settings, sizeof(ao_settings));
+            commands->draw(nvrhi::DrawArguments().setVertexCount(3));
+            state.pipeline = r.blur_pipeline;
+            for (std::size_t pass = 0; pass < 2; ++pass) {
+                state.framebuffer = frame.ao_fb[pass + 1];
+                state.bindings = {frame.blur_bindings[pass]};
+                commands->setGraphicsState(state);
+                ao_settings.w = static_cast<float>(pass);
+                commands->setPushConstants(&ao_settings, sizeof(ao_settings));
+                commands->draw(nvrhi::DrawArguments().setVertexCount(3));
+            }
+        } else {
+            commands->clearTextureFloat(frame.ao[2], nvrhi::AllSubresources, nvrhi::Color(1));
+        }
         state.pipeline = r.tone_pipeline;
         state.framebuffer = frame.output_fb;
         state.bindings = {frame.tone_bindings};
         state.viewport = viewport(vk.extent.width, vk.extent.height);
         commands->setGraphicsState(state);
-        const glm::vec4 settings(1.15F, 0, 0, 0);
+        const glm::vec4 settings(1.15F, 0, ao.visualize ? 1.0F : 0.0F, 0);
         commands->setPushConstants(&settings, sizeof(settings));
         commands->draw(nvrhi::DrawArguments().setVertexCount(3));
         const auto overlay_data = overlay_vertices(vk.extent.width, vk.extent.height, overlay);
@@ -815,6 +925,8 @@ struct Renderer::Impl {
             commands->draw(nvrhi::DrawArguments().setVertexCount(
                 static_cast<std::uint32_t>(overlay_data.size())));
         }
+        if (extension)
+            extension({commands, frame.output_fb, frame_index, vk.extent.width, vk.extent.height});
         if (vk.window) {
             commands->beginTrackingTextureState(r.swap_images[image], nvrhi::AllSubresources,
                                                 r.presented[image] ? nvrhi::ResourceStates::Present
@@ -893,8 +1005,39 @@ void Renderer::set_overlay(std::string title, std::string status, std::string co
         throw std::invalid_argument("overlay lines are limited to 128 bytes");
     impl_->overlay = {std::move(title), std::move(status), std::move(controls)};
 }
-bool Renderer::draw(const Scene& scene) {
-    return impl_->draw(scene);
+void AmbientOcclusion::validate() const {
+    if (!std::isfinite(radius) || radius < 0.01F || radius > 100 || !std::isfinite(bias) ||
+        bias < 0 || bias >= radius || !std::isfinite(strength) || strength < 0 || strength > 4)
+        throw std::invalid_argument(
+            "SSAO requires radius [0.01,100], bias [0,radius), strength [0,4]");
+}
+void Renderer::set_ambient_occlusion(const AmbientOcclusion& settings) {
+    settings.validate();
+    impl_->config.ambient_occlusion = settings;
+}
+bool Renderer::draw(const Scene& scene, const RenderView* view,
+                    const std::function<void(const RenderFrame&)>& overlay) {
+    return impl_->draw(scene, view, overlay);
+}
+GLFWwindow* Renderer::window() const noexcept {
+    return impl_->vk.window;
+}
+nvrhi::IDevice* Renderer::graphics_device() const noexcept {
+    return impl_->device;
+}
+void Renderer::wait_idle() {
+    if (!impl_->device->waitForIdle())
+        throw std::runtime_error("device lost while waiting for rendering");
+}
+void RenderView::validate() const {
+    transform.validate();
+    camera.validate();
+    for (int i = 0; i < 4; ++i)
+        if (!std::isfinite(bounds[i]))
+            throw std::invalid_argument("viewport bounds must be finite");
+    if (bounds.x < 0 || bounds.y < 0 || bounds.z <= 0 || bounds.w <= 0 || bounds.x + bounds.z > 1 ||
+        bounds.y + bounds.w > 1)
+        throw std::invalid_argument("viewport must lie within the output image");
 }
 void Renderer::resize(std::uint32_t width, std::uint32_t height) {
     if (width < 64 || height < 64 || width > 4096 || height > 4096)

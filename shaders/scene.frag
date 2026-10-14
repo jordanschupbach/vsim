@@ -3,6 +3,8 @@ layout(location=0) in vec3 worldPosition;
 layout(location=1) in vec3 worldNormal;
 layout(location=2) in vec4 shadowPosition;
 layout(location=0) out vec4 outColor;
+layout(location=1) out vec4 outAmbient;
+layout(location=2) out vec4 outNormal;
 layout(set=0,binding=256,std140) uniform Frame {
     mat4 viewProjection;
     mat4 lightViewProjection;
@@ -50,7 +52,10 @@ void main() {
     vec3 specular = distribution*geometry*f/max(4.0*nv*nl,0.001);
     vec3 diffuse = (1.0-f)*(1.0-metallic)*albedo/PI;
     vec3 ambient = mix(vec3(0.055,0.065,0.09),vec3(0.28,0.34,0.43),n.y*0.5+0.5);
+    vec3 indirect = ambient*albedo*(1.0-metallic*0.65);
     vec3 color = (diffuse+specular)*frame.sunColor.rgb*nl*shadow(n,l)
-               + ambient*albedo*(1.0-metallic*0.65) + albedo*object.material.z;
+               + indirect + albedo*object.material.z;
     outColor = vec4(color,1.0);
+    outAmbient = vec4(indirect,1.0);
+    outNormal = vec4(n,1.0);
 }

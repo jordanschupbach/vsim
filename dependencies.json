@@ -1,4 +1,28 @@
 {
+  "imgui": {
+    "url": "https://github.com/ocornut/imgui.git",
+    "revision": "f5befd2d29e66809cd1110a152e375a7f1981f06",
+    "license": "MIT",
+    "nix_hash": "sha256-dkukDP0HD8CHC2ds0kmqy7KiGIh4148hMCyA1QF3IMo="
+  },
+  "imguizmo": {
+    "url": "https://github.com/CedricGuillemet/ImGuizmo.git",
+    "revision": "9e437c6ce80453bd45a5674ac2d81ee754cee95c",
+    "license": "MIT",
+    "nix_hash": "sha256-woNom5Cv544wGDkV3Lwf3X+KmkbKnoUWLJ9wXm9uaTo="
+  },
+  "miniaudio": {
+    "url": "https://github.com/mackron/miniaudio.git",
+    "revision": "9634bedb5b5a2ca38c1ee7108a9358a4e233f14d",
+    "license": "MIT-0 OR Unlicense",
+    "nix_hash": "sha256-2k346Z/ueINPbaY20P2cbBvRfFXXH0ugdv4d7WaYt2w="
+  },
+  "stb": {
+    "url": "https://github.com/nothings/stb.git",
+    "revision": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+    "license": "MIT OR Unlicense",
+    "nix_hash": "sha256-vA5RZLte4gf5/NkbWT3VNzGVD04kyVTHPeEZwxNnxi0="
+  },
   "nvrhi": {
     "url": "https://github.com/NVIDIA-RTX/NVRHI.git",
     "revision": "cca66aeb084429c880d205e508f5276b6ac13c38",

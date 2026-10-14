@@ -1,4 +1,10 @@
-# Initial Linux validation — 2026-10-13
+# Linux validation history — 2026-10-13
+
+The latest graphical editor validation is recorded at the end of this document.
+Earlier entries describe the capabilities and constraints at their respective
+milestones; they are retained as historical evidence.
+
+## Initial Linux validation
 
 This record covers the implemented headless foundation. It does not certify the
 unimplemented renderer, physics, audio, graphical editor, or portable game export.
@@ -234,3 +240,134 @@ Remaining environmental/release gates:
 - GitHub remote inspection still fails with `Could not resolve host: github.com`.
   After review and passing checks, `git add --all` failed to create `.git/index.lock`
   with `Read-only file system`. No commit or push was possible.
+
+
+## Graphical editor integration in progress (2026-10-13)
+
+The frontend is not yet a verified deliverable. New Dear ImGui 1.91.9b and ImGuizmo
+1.9 source revisions are pinned in `dependencies.json`. Fetching them from this
+session fails with `Could not resolve host: github.com`. The user has been asked
+to run `just deps`. Frontend compilation, its new `graphical_editor` suite, GUI
+screenshots, desktop input, gizmo interaction, and Nix source hashes are pending.
+
+The independently buildable editor model and renderer extension have executable
+evidence, using the existing Nix GCC 14.3/CMake 4.1 toolchain and Mesa llvmpipe:
+
+- `bash scripts/check.sh debug`: 13/13 suites passed with
+  `VSIM_BUILD_EDITOR_GUI=OFF` explicitly configured.
+- `bash scripts/check.sh asan`: 13/13 suites passed with GUI off and local
+  `ASAN_OPTIONS=detect_leaks=0`, `UBSAN_OPTIONS=halt_on_error=1`. Leak checking is
+  still blocked by this sandbox's process-inspection restrictions.
+- `bash scripts/check.sh release`: 10/10 suites passed, editor excluded.
+- New coverage checks transactional batches and redo preservation, persistent
+  Lua/Jolt play previews, stop/error recovery without authored-scene changes,
+  selection lifetime, dirty state, explicit atomic save replacement, primitive
+  picking, clipping, nonuniform transforms, and editor camera/viewport rendering.
+- Runtime installation tests still verify both installed executables, scene runs,
+  software Vulkan validation, and exclusion of editor executables.
+
+`just editor` now explicitly enables the graphical target; it will require the
+new sources rather than accidentally launching a stale command-editor binary.
+The JSON command executable and recipe are now `vsim_editor_cli` and `editor-cli`.
+No changes from this integration have been committed or pushed while the GUI is
+uncompiled. Passing the above tests does not imply GUI, driver, or platform certification.
+
+
+## Shared viewport commands and SSAO (2026-10-13)
+
+The CLI and GUI now share `view`, `set_view`, `focus`, and `pick` through the
+editor model. Protocol tests verify camera initialization, focus framing, picking,
+invalid request rollback, play-mode restrictions, and independence from authored
+scene history. The graphical adapter still awaits dependency fetch/compilation.
+
+SSAO is implemented in the existing NVRHI pipeline and enabled by default. GPU
+readbacks verify open-plane visibility, contact darkening, unaffected background,
+disable/zero-strength behavior, and final lighting composition. Existing shadow,
+viewport orientation, resize, resource churn, and runtime install tests still pass.
+A binding-register collision found by NVRHI validation during development was fixed
+before the passing runs. AO constants use b1; frame constants use b0.
+
+- Debug: 13/13 CTest suites passed, with GUI explicitly excluded.
+- ASan/UBSan: 13/13 passed, with GUI excluded and the previously documented local
+  LeakSanitizer exception. Release: 10/10 passed, editor excluded.
+- The example ran for 12 offscreen frames at 960x600 on llvmpipe with zero validation
+  errors. The resulting game and AO diagnostic captures were visually inspected.
+- New GUI shaders compile with glslc; this is not a GUI C++ build or GUI test pass.
+
+Generated evidence is under `build/debug/courier-ssao.png` and
+`build/debug/ssao-contacts.png` and is intentionally not tracked. Physical driver,
+window interaction, and cross-platform evidence are still required. miniaudio and
+stb pins were added to the pending explicit dependency fetch for later milestones;
+this does not claim audio or image-loader integration.
+
+## Graphical editor built and exercised (2026-10-13)
+
+This entry supersedes the earlier missing-GUI-source blocker. After the owner ran
+`just deps`, all seven cached dependency HEADs matched `dependencies.json` and
+their worktrees were clean. Dear ImGui and ImGuizmo now compile into the separate
+`vsim_editor` executable. Nix hashes for the four newly fetched sources were
+computed from clean `git archive` trees; GUI source overrides were added to the
+flake. The remote fixed-output downloads and complete Nix package build remain
+unverified in this session.
+
+Validation uses the cached Nix shell: GCC 14.3.0, CMake 4.1.2, and Mesa llvmpipe
+25.2.6. The following checks passed with actual Vulkan/NVRHI rendering:
+
+- Debug: 15/15 CTest suites, including `graphical_editor` and `editor_interaction`.
+- ASan/UBSan: 15/15 suites with `ASAN_OPTIONS=detect_leaks=0` and
+  `UBSAN_OPTIONS=halt_on_error=1`. The existing leak-inspection restriction remains;
+  no sanitizer defaults were weakened.
+- Release runtime configuration: 10/10 suites, with editor targets disabled.
+- An additional optimized build with the editor enabled passed both GUI suites.
+  The release preset was then restored to its runtime-only configuration.
+- The complete `just editor examples/crystal_courier_3d/scene.json --offscreen
+  --frames 3 --validate --capture build/debug/editor.ppm` recipe built and rendered
+  successfully, reporting zero validation errors. Its converted capture at
+  `build/debug/editor.png` was visually inspected.
+- GUI tests drive actual ImGui mouse events to create a cube, select it by mesh
+  picking, drag the X-axis gizmo, verify a single undo entry, undo/redo, move the
+  editor camera, and start/stop play without changing the authored scene. Renderer
+  validation is checked after GUI teardown as well as during rendering.
+- Process-level GUI tests cover saved scenes, persistent simulation previews,
+  command-file validation, empty scenes, text/viewport/inspector image content,
+  and literal paths containing shell metacharacters through the real just recipe.
+- C++ formatting, just formatting, Nix syntax parsing, generated scene checks,
+  runtime installation, and Git whitespace checks passed.
+
+Review found and fixed an ImGuizmo header ordering requirement and a memory read
+past the GUI index array. NVRHI rounds short Vulkan uploads to four-byte multiples;
+an odd number of 16-bit ImGui indices previously left two missing source bytes.
+The sanitizer GUI test caught this, and initialized padding now protects the
+upload. The failing test passes with the fix. Review also synchronized the editor
+view immediately after a GUI load or console command and avoided busy polling
+while the native window is minimized.
+
+Remaining evidence limits: the real desktop launch fails with `X11: Failed to
+open display :0`. Offscreen input injection does not validate GLFW event delivery,
+window focus, DPI scaling, or physical GPU drivers. Direnv falls back to its
+previous cached shell because Nix cannot write the managed session's user cache;
+the new flake was syntax checked but not built. Remote Git inspection still cannot
+resolve GitHub, and protected `.git` prevents publication. glTF/textures, HDRI/IBL,
+miniaudio integration, portable export, and Windows/macOS validation remain in the
+original goal; this editor milestone does not claim those features.
+
+## Example camera orbit (2026-10-13)
+
+Crystal Courier 3D's Camera entity now embeds `camera.lua`. It orbits at six
+degrees per second, preserves its authored height/radius and lens, and aims at
+the arena center. The new `engine.set_rotation(id, w, x, y, z)` binding uses the
+existing validated scene mutation path, retaining the entity's other components.
+API discovery, scripting documentation, and the conformance scene cover it.
+
+Review checked quaternion multiplication/order, delta-based motion, bounded
+angle accumulation, script-source retention, and scene generation. Tests cover
+invalid quaternion arguments without mutation, a complete orbit and wraparound,
+center aim, floor framing at game/editor aspect ratios, timestep independence,
+game execution, and camera changes during editor Play with authored-state
+restoration after Stop.
+
+All required check scripts passed in the cached Nix environment: debug 15/15,
+ASan/UBSan 15/15 (the documented local `detect_leaks=0` limitation), and runtime
+release 10/10. An offscreen editor capture after 900 simulation ticks showed the
+expected quarter-orbit view with zero Vulkan validation errors; the image was
+visually inspected at `build/debug/camera-orbit-15s.png`.

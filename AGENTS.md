@@ -25,11 +25,16 @@ VSim is the provisional name pending the owner's selection. The product brief is
 - RAII owns resources. No owning raw pointers, global mutable engine singletons,
   homegrown physics substitutes, silent feature fallbacks, or unchecked GPU calls.
 - NVRHI/Vulkan and Jolt are implemented; their contracts and limits are in
-  `docs/graphics-physics.md`. Miniaudio, glTF, IBL, SSAO, and the graphical editor
-  remain integration milestones. Require executable evidence for backend claims.
+  `docs/graphics-physics.md`. Miniaudio, glTF, and IBL remain integration milestones.
+  The graphical editor passes offscreen rendering/input tests; desktop and physical
+  GPU checks remain. Require executable evidence for backend claims.
 - Preserve NVRHI's negative-height viewport convention and keep depth/shadow/HUD
-  orientation image tests passing. One Renderer owns the static Vulkan-Hpp
-  dispatcher at a time. Release NVRHI resources before native Vulkan objects.
+  orientation image tests passing. SSAO must attenuate indirect light only; preserve
+  open-surface, contact, disable/re-enable, and subviewport image checks. One
+  Renderer owns the static Vulkan-Hpp dispatcher at a time. Release NVRHI resources
+  before native Vulkan objects.
+- Pad Vulkan buffer uploads to four initialized bytes of alignment, including
+  odd counts of 16-bit ImGui indices. Preserve the sanitizer GUI regression.
 - Keep `Jolt/Jolt.h` before other Jolt headers. Gameplay runs through `Simulation`
   (scripts followed by physics); body edits/removal must reconcile before queries.
 

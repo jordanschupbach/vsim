@@ -22,6 +22,21 @@ class GraphicalGameTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertTrue(result.stderr.startswith("vsim_game: "), result.stderr)
 
+    def test_ssao_diagnostic_flags_reach_rendering(self):
+        with tempfile.TemporaryDirectory() as folder:
+            capture = Path(folder) / "ao.ppm"
+            result = subprocess.run([
+                game, "--scene", str(root / "examples/crystal_courier_3d/scene.json"),
+                "--offscreen", "--frames", "2", "--validate", "--width", "320", "--height", "240",
+                "--show-ssao", "--no-ssao", "--capture", str(capture)
+            ], text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            pixels = capture.read_bytes().split(b"\n", 3)[3]
+            # HUD is still drawn; the middle of the disabled AO image is white.
+            middle = (120 * 320 + 160) * 3
+            self.assertEqual(pixels[middle:middle + 3], b"\xff\xff\xff")
+            self.assertEqual(json.loads(result.stdout)["validation_errors"], 0)
+
     def test_game_and_run_recipes_render_and_forward_literal_paths(self):
         with tempfile.TemporaryDirectory(prefix="vsim graphical ") as folder:
             workspace = Path(folder)
@@ -50,6 +65,13 @@ class GraphicalGameTests(unittest.TestCase):
                 player = next(e["components"] for e in json.loads(scene.read_text())["entities"]
                               if e["components"]["name"] == "Player")
                 self.assertLess(player["transform"]["position"][1], 1.1)
+                camera = next(e["components"] for e in json.loads(scene.read_text())["entities"]
+                              if e["components"]["name"] == "Camera")
+                self.assertGreater(camera["transform"]["position"][0], 0)
+                self.assertLess(camera["transform"]["position"][2], 22)
+                self.assertEqual(camera["transform"]["position"][1], 19)
+                self.assertIn("script", camera)
+                self.assertEqual(camera["camera"]["vertical_fov"], 48)
                 self.assertFalse((workspace / "SHOULD_NOT_EXIST").exists())
 
 
