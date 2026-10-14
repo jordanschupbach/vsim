@@ -372,6 +372,47 @@ release 10/10. An offscreen editor capture after 900 simulation ticks showed the
 expected quarter-orbit view with zero Vulkan validation errors; the image was
 visually inspected at `build/debug/camera-orbit-15s.png`.
 
+## Mep transfer preparation (2026-10-13)
+
+The editor now accepts `--x11` for Mep's existing native `:exec` panes. The
+relocatable `scripts/mep-editor.sh` launches a prebuilt editor, defaults to the
+Crystal Courier 3D scene, preserves workspace-relative custom paths and the
+child PID, and propagates the editor's exit code. `just editor-pane` exposes the
+same launcher. Incompatible `--x11 --offscreen` options fail before GPU creation.
+
+Review covered GLFW initialization/lifetime, unchanged automatic platform
+selection for standalone use, argument quoting, child ownership, migration
+paths, preservation of Mep's local changes, and the root-level engine CI workflow.
+In the cached GCC 14.3.0/CMake 4.1.2 Nix shell with Mesa software Vulkan:
+
+- Debug: 16/16 CTest suites passed.
+- ASan/UBSan: 16/16 passed, with the previously documented local
+  `ASAN_OPTIONS=detect_leaks=0` and `UBSAN_OPTIONS=halt_on_error=1` settings.
+- Runtime release: 11/11 passed, including installation and GPU checks.
+- A fresh `engines/vsim` copy under `build/mep-relocated/` configured, compiled,
+  and passed all 16 debug suites using its own copied dependency cache. No old
+  CMake cache or generated binaries were used. All seven copied dependency
+  checkouts passed revision and clean-worktree checks without downloading.
+- The four new launcher cases test relocation, literal shell metacharacters,
+  workspace retention, PID/exit status, and a missing prebuilt executable.
+- C++/just formatting, shell syntax, generated scenes, Git whitespace, and the
+  Mep workflow's YAML/build paths were checked. The archive of the original
+  committed Git history passed `git bundle verify`.
+
+The real destination `/home/jordan/projects/mep` is read-only in this managed
+session. The prepared transfer is under `build/mep-transfer`; it has **not** been
+applied there. The original VSim checkout and Mep's local changes are preserved.
+Committed history ends at `e7ee6bb`; the payload also contains the reviewed
+uncommitted pane-integration changes. Build products and direnv caches must be
+regenerated at the destination.
+
+Actual pane embedding remains unverified: launching the editor reports
+`X11: Failed to open display :0`. Running Mep's existing
+`build/native/mep-gui-embed-test` from `/tmp` also failed two assertions at
+`src/gui_embed_test.cpp:232` and `:233` (expected child stdout `hello` and stderr
+`oops`). No Mep sources were modified. These host-side failures remain in the
+handoff; engine offscreen tests do not establish native pane/focus correctness.
+
 ## 2026-10-13: joints, capsules, axis locks, angular velocity, headless SDK
 
 Checked with GCC 14.3.0 in the Nix dev shell on the NixOS host. `scripts/check.sh
@@ -388,6 +429,10 @@ capsule rest poses, planar axis locks, hinge sign and limits, slider coordinates
 and limits, joint torques with parent reaction, joint-pair collision exclusion,
 reference validation (missing parent, cycle, parent without body, parent destroyed
 later), chain teleports, reload of jointed scenes, and the Lua joint bindings.
-`nix build .#core` and `nix flake check` were not run in this session (store
-space and network were limited); the headless package definition mirrors the
-tested CMake preset.
+`nix build` of the `core` package was exercised through a consumer flake
+(tflow_examples): Jolt and the core compiled and 7/8 tests passed inside the
+sandbox; `runtime_installation` failed because nixpkgs' CMake hook passes
+absolute `CMAKE_INSTALL_*DIR` values, which sent `cmake --install --prefix`
+output into the store path. The flake now pins those directories to relative
+names, after which the consumer's dev shell builds. `nix flake check` of the
+full package (GPU tests under Mesa) was not run in this session.

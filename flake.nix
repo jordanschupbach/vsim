@@ -34,7 +34,12 @@
             ++ (if headless then [ ] else [ pkgs.shaderc ]);
           buildInputs = [ pkgs.glm pkgs.nlohmann_json pkgs.lua5_4 ]
             ++ (if headless then [ ] else [ pkgs.glfw pkgs.vulkan-headers pkgs.vulkan-loader ]);
+          # nixpkgs' CMake hook passes absolute install directories; relative ones keep
+          # `cmake --install --prefix` (used by the installation test and SDK consumers)
+          # relocatable.
           cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release"
+            "-DCMAKE_INSTALL_BINDIR=bin" "-DCMAKE_INSTALL_LIBDIR=lib"
+            "-DCMAKE_INSTALL_INCLUDEDIR=include" "-DCMAKE_INSTALL_DATADIR=share"
             "-DVSIM_JOLT_SOURCE=${sourceFor "jolt" "jrouwe" "JoltPhysics"}"
           ] ++ (if headless then [
             "-DVSIM_BUILD_3D=OFF" "-DVSIM_BUILD_PLATFORM_PROBE=OFF" "-DVSIM_BUILD_EDITOR=OFF"
