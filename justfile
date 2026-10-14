@@ -48,6 +48,10 @@ alias run := game
 editor scene="examples/crystal_courier_3d/scene.json" *args: build-editor
     ./build/debug/vsim_editor --scene "$1" "${@:2}"
 
+# Launch the prebuilt X11 editor for Mep's :exec pane (build-editor once first).
+editor-pane *args:
+    bash scripts/mep-editor.sh "$@"
+
 # Explicitly enable the GUI even after a headless development configuration.
 build-editor:
     cmake --preset debug -DVSIM_BUILD_EDITOR=ON -DVSIM_BUILD_3D=ON -DVSIM_BUILD_EDITOR_GUI=ON

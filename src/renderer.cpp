@@ -83,23 +83,25 @@ class Diagnostics final : public nvrhi::IMessageCallback {
 };
 
 struct GlfwLifetime {
-    GlfwLifetime() {
+    explicit GlfwLifetime(bool x11) {
         glfwSetErrorCallback([](int code, const char* text) {
             std::cerr << "GLFW " << code << ": " << text << '\n';
         });
+        glfwInitHint(GLFW_PLATFORM, x11 ? GLFW_PLATFORM_X11 : GLFW_ANY_PLATFORM);
         if (!glfwInit())
             throw std::runtime_error(
-                "GLFW initialization failed; run the game in a desktop session");
+                x11 ? "GLFW X11 initialization failed; an accessible X11 display is required"
+                    : "GLFW initialization failed; run the editor/game in a desktop session");
     }
     ~GlfwLifetime() {
         glfwTerminate();
     }
-    static std::shared_ptr<GlfwLifetime> acquire() {
+    static std::shared_ptr<GlfwLifetime> acquire(bool x11) {
         // GLFW calls, including construction/destruction, are restricted to the main thread.
         static std::weak_ptr<GlfwLifetime> shared;
         auto instance = shared.lock();
         if (!instance) {
-            instance = std::make_shared<GlfwLifetime>();
+            instance = std::make_shared<GlfwLifetime>(x11);
             shared = instance;
         }
         return instance;
@@ -161,7 +163,7 @@ struct VulkanContext {
     void initialize(const RendererConfig& config) {
         extent = {config.width, config.height};
         if (!config.offscreen) {
-            glfw = GlfwLifetime::acquire();
+            glfw = GlfwLifetime::acquire(config.x11);
             if (!glfwVulkanSupported())
                 throw std::runtime_error("GLFW cannot find a Vulkan loader/driver");
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -470,6 +472,9 @@ struct Renderer::Impl {
         backend = nullptr;
     }
     void initialize(RendererConfig options) {
+        if (options.x11 && options.offscreen)
+            throw std::invalid_argument(
+                "X11 window selection is incompatible with offscreen rendering");
         if (options.width < 64 || options.height < 64 || options.width > 4096 ||
             options.height > 4096)
             throw std::invalid_argument("render dimensions must be in [64,4096]");

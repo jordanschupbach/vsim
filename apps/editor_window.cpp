@@ -55,10 +55,10 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--help") {
-                std::cout
-                    << "Usage: vsim_editor [--scene PATH] [--validate] [--offscreen --frames N]\n"
-                       "                   [--capture IMAGE.ppm] [--commands COMMANDS.json]\n"
-                       "For JSON lines on stdin, use vsim_editor_cli.\n";
+                std::cout << "Usage: vsim_editor [--scene PATH] [--validate] [--x11 | --offscreen "
+                             "--frames N]\n"
+                             "                   [--capture IMAGE.ppm] [--commands COMMANDS.json]\n"
+                             "For JSON lines on stdin, use vsim_editor_cli.\n";
                 return 0;
             }
             if (!seen.insert(option).second)
@@ -69,6 +69,10 @@ int main(int argc, char** argv) {
             }
             if (option == "--validate") {
                 config.validation = true;
+                continue;
+            }
+            if (option == "--x11") {
+                config.x11 = true;
                 continue;
             }
             if (i + 1 >= argc)
@@ -87,6 +91,8 @@ int main(int argc, char** argv) {
             else
                 throw std::invalid_argument("unknown option: " + option);
         }
+        if (config.x11 && config.offscreen)
+            throw std::invalid_argument("--x11 cannot be combined with --offscreen");
         if ((config.offscreen || !commands_path.empty()) && frames == 0)
             throw std::invalid_argument("offscreen rendering and automation require --frames");
         const auto commands = commands_from_file(commands_path, frames);

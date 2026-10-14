@@ -89,6 +89,12 @@ int main(int argc, char** argv) {
             rejects([] { Image{0, 0, {}}.write_ppm("invalid.ppm"); });
             rejects([] { Image{0x80000000U, 0x80000000U, {}}.write_ppm("invalid.ppm"); });
         });
+        test("X11 selection rejects offscreen rendering before GPU creation", [] {
+            RendererConfig invalid;
+            invalid.offscreen = true;
+            invalid.x11 = true;
+            rejects([&] { Renderer renderer(invalid); });
+        });
         {
             Renderer renderer({320, 240, !window, true});
             std::cout << "Device: " << renderer.device_name() << '\n';

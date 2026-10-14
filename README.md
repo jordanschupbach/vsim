@@ -37,6 +37,9 @@ undo/redo, saving, and isolated play/stop previews. Use RMB + WASD/QE to fly the
 editor camera, the wheel to dolly, and F to focus the selected entity. See the
 [editor guide](docs/editor.md) for authoring and agent automation.
 
+To host the editor as a pane in Mep, see [Mep integration](docs/mep-integration.md).
+The launcher uses Mep's existing native application panes on Linux/X11.
+
 The editor has passed offscreen Vulkan rendering, mouse interaction, and sanitizer
 tests. Desktop presentation, high-DPI behavior, and physical GPU coverage still
 need validation on accessible hosts. `just editor-cli` remains the JSON command
@@ -53,6 +56,7 @@ the same pinned revisions and source hashes from `dependencies.json`.
 |---|---|
 | `just game [arguments...]` / `just run` | Build and launch Crystal Courier 3D |
 | `just editor [scene.json] [arguments...]` | Build/open the graphical scene editor |
+| `just editor-pane [scene.json] [arguments...]` | Launch the prebuilt X11 editor for a Mep pane |
 | `just editor-cli [scene.json]` | Open the tested JSON command service |
 | `just game-cli` | Run the terminal example |
 | `just build [preset]` | Configure and compile debug, asan, or release |

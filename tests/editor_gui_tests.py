@@ -84,11 +84,15 @@ class EditorGuiTests(unittest.TestCase):
     def test_invalid_arguments_and_automation_fail_before_gpu_creation(self):
         for arguments in [["--offscreen"], ["--frames", "0"], ["--frames", "2.5"],
                           ["--frames", "-1"], ["--frames", "100001"], ["--unknown", "x"],
-                          ["--scene"], ["--validate", "--validate"]]:
+                          ["--scene"], ["--validate", "--validate"], ["--x11", "--x11"]]:
             result = subprocess.run([editor, *arguments], input="", text=True,
                                     capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertTrue(result.stderr.startswith("vsim_editor: "))
+        result = subprocess.run([editor, "--x11", "--offscreen", "--frames", "1"],
+                                input="", text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), "vsim_editor: --x11 cannot be combined with --offscreen")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "commands.json"
             for commands in [{}, [{"frame": 3, "request": {"op": "scene"}}],

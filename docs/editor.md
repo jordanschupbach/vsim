@@ -4,6 +4,11 @@ Run `just editor` from the Nix development shell to open Crystal Courier 3D.
 To edit another scene, use `just editor path/to/scene.json`. To start an empty
 scene, build with `just build-editor`, then run `build/debug/vsim_editor`.
 
+The editor can also run inside a Mep pane using `scripts/mep-editor.sh`; see
+[Mep integration](mep-integration.md) for setup, focus controls, and platform limits.
+`vsim_editor --x11` requires an X11 window instead of GLFW's automatic platform
+selection; it cannot be combined with `--offscreen`.
+
 The left panel lists entities and offers **Add cube**, **Add entity**, and prefab
 controls. Click an entity or a visible mesh to select it. The right panel edits
 its name, transform, mesh/material, rigid body, joint, camera, and Lua script. Changes

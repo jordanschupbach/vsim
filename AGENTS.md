@@ -58,6 +58,10 @@ VSim is the provisional name pending the owner's selection. The product brief is
   `https://github.com/jordanschupbach/vsim`; inspect existing remote history first,
   preserve it, and never force-push. Permission/network restrictions must be
   reported, not worked around by relocating protected Git metadata.
+- When this project is hosted under Mep's `engines/vsim`, follow the containing
+  repository's publication rules. The VSim remote authorization above does not
+  authorize publishing Mep changes. Use `docs/mep-integration.md` for pane setup;
+  keep the engine's build and Nix environment independent of Mep's toolchain.
 
 ## Repository skills
 

@@ -38,6 +38,8 @@ struct RendererConfig {
     bool offscreen{false};
     bool validation{false};
     AmbientOcclusion ambient_occlusion{};
+    // Require an X11 window for native pane embedding; incompatible with offscreen.
+    bool x11{false};
 };
 struct Image {
     std::uint32_t width;

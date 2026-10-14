@@ -18,10 +18,15 @@ class RecipeTests(unittest.TestCase):
         result = subprocess.run([just, "--list"], cwd=root, text=True, capture_output=True, check=True)
         self.assertIn("game", result.stdout)
         self.assertIn("editor", result.stdout)
+        self.assertIn("editor-pane", result.stdout)
         for recipe in ["game", "editor", "test", "runtime", "install", "rebuild"]:
             dry = subprocess.run([just, "--dry-run", recipe], cwd=root, text=True,
                                  capture_output=True, check=True)
             self.assertIn("cmake --build", dry.stderr)
+        dry = subprocess.run([just, "--dry-run", "editor-pane"], cwd=root, text=True,
+                             capture_output=True, check=True)
+        self.assertIn("mep-editor.sh", dry.stderr)
+        self.assertNotIn("cmake", dry.stderr)
 
     def test_rebuild_rediscovers_dependencies_after_environment_change(self):
         with tempfile.TemporaryDirectory(prefix="vsim rebuild ") as folder:
