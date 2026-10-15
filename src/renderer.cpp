@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -439,6 +440,9 @@ struct Resources {
     nvrhi::GraphicsPipelineHandle shadow_pipeline, scene_pipeline, tone_pipeline, overlay_pipeline,
         ao_pipeline, blur_pipeline;
     std::vector<Frame> frames;
+    // Reused by capture(); sized with the frames.
+    nvrhi::StagingTextureHandle readback;
+    nvrhi::CommandListHandle readback_commands;
     std::vector<nvrhi::TextureHandle> swap_images;
     std::vector<bool> presented;
 };
@@ -657,6 +661,7 @@ struct Renderer::Impl {
         auto& r = *resources;
         r.frames.clear();
         r.frames.resize(frames_in_flight);
+        r.readback = nullptr;
         for (auto& frame : r.frames) {
             frame.shadow = target("Sun shadow", nvrhi::Format::D32, shadow_size, shadow_size,
                                   nvrhi::ResourceStates::ShaderResource);
@@ -1056,42 +1061,53 @@ void Renderer::resize(std::uint32_t width, std::uint32_t height) {
     }
 }
 Image Renderer::capture() {
+    Image image{0, 0, {}};
+    capture(image);
+    return image;
+}
+void Renderer::capture(Image& image) {
     if (!impl_->has_frame)
         throw std::logic_error("render a frame before capturing it");
-    auto& frame = impl_->resources->frames[impl_->last_frame];
+    auto& r = *impl_->resources;
+    auto& frame = r.frames[impl_->last_frame];
     auto& device = impl_->device;
-    auto staging =
-        required(device->createStagingTexture(frame.output->getDesc(), nvrhi::CpuAccessMode::Read),
-                 "readback texture");
-    auto commands = required(device->createCommandList(), "readback commands");
+    if (!r.readback)
+        r.readback = required(
+            device->createStagingTexture(frame.output->getDesc(), nvrhi::CpuAccessMode::Read),
+            "readback texture");
+    if (!r.readback_commands)
+        r.readback_commands = required(device->createCommandList(), "readback commands");
+    auto& commands = r.readback_commands;
     commands->open();
-    commands->copyTexture(staging, nvrhi::TextureSlice(), frame.output, nvrhi::TextureSlice());
+    commands->copyTexture(r.readback, nvrhi::TextureSlice(), frame.output, nvrhi::TextureSlice());
     commands->close();
     device->executeCommandList(commands);
     if (!device->waitForIdle())
         throw std::runtime_error("device lost during capture");
     const auto width = impl_->vk.extent.width, height = impl_->vk.extent.height;
-    Image result{width, height,
-                 std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4)};
+    image.width = width;
+    image.height = height;
+    image.rgba.resize(static_cast<std::size_t>(width) * height * 4);
     std::size_t pitch = 0;
     const auto* mapped = static_cast<const std::uint8_t*>(device->mapStagingTexture(
-        staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &pitch));
+        r.readback, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &pitch));
     if (!mapped)
         throw std::runtime_error("could not map captured image");
+    // BGRA to RGBA, one 32-bit pixel at a time (the loop vectorizes).
+    static_assert(std::endian::native == std::endian::little);
     for (std::uint32_t y = 0; y < height; ++y) {
+        const auto* source = mapped + static_cast<std::size_t>(y) * pitch;
+        auto* destination = image.rgba.data() + static_cast<std::size_t>(y) * width * 4;
         for (std::uint32_t x = 0; x < width; ++x) {
-            const auto source = static_cast<std::size_t>(y) * pitch + x * 4;
-            const auto destination = (static_cast<std::size_t>(y) * width + x) * 4;
-            result.rgba[destination] = mapped[source + 2];
-            result.rgba[destination + 1] = mapped[source + 1];
-            result.rgba[destination + 2] = mapped[source];
-            result.rgba[destination + 3] = mapped[source + 3];
+            std::uint32_t pixel = 0;
+            std::memcpy(&pixel, source + static_cast<std::size_t>(x) * 4, 4);
+            pixel = (pixel & 0xFF00FF00U) | ((pixel >> 16) & 0xFFU) | ((pixel & 0xFFU) << 16);
+            std::memcpy(destination + static_cast<std::size_t>(x) * 4, &pixel, 4);
         }
     }
-    device->unmapStagingTexture(staging);
+    device->unmapStagingTexture(r.readback);
     if (impl_->vk.diagnostics.errors.load() != 0)
         throw std::runtime_error("capture failed validation");
-    return result;
 }
 std::string Renderer::device_name() const {
     return impl_->vk.name;

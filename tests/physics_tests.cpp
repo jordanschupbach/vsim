@@ -845,6 +845,94 @@ int main() {
         step(simulation, 60);
         CHECK(simulation.physics().joint_state(arm).position > 0.3F);
     });
+    test("scene revisions change on every edit and identify identical copies", [] {
+        Scene scene;
+        const auto empty = scene.revision();
+        const auto id = scene.create(body({0, 1, 0}));
+        const auto created = scene.revision();
+        CHECK(created != empty);
+        Scene copy = scene;
+        CHECK(copy.revision() == created);
+        copy.set_motion(id, {0, 2, 0}, {1, 0, 0, 0}, {1, 0, 0}, {0, 0, 0});
+        CHECK(copy.revision() != created && scene.revision() == created);
+        near(copy.get(id).transform.position.y, 2);
+        near(copy.get(id).rigid_body->linear_velocity.x, 1);
+        Scene other;
+        (void)other.create(body({0, 1, 0}));
+        CHECK(other.revision() != created);
+        auto edited = scene.get(id);
+        edited.transform.position.x = 3;
+        scene.set(id, edited);
+        CHECK(scene.revision() != created);
+        const auto before = scene.revision();
+        rejects([&] { scene.set_motion(id, {0, NAN, 0}, {1, 0, 0, 0}, {}, {}); });
+        rejects([&] { scene.set_motion(id, {}, {2, 0, 0, 0}, {}, {}); });
+        rejects([&] { scene.set_motion(id, {}, {1, 0, 0, 0}, {600, 0, 0}, {}); });
+        Entity plain;
+        const auto no_body = scene.create(plain);
+        rejects([&] { scene.set_motion(no_body, {}, {1, 0, 0, 0}, {}, {}); });
+        CHECK(scene.get(id).transform.position.x == 3 && scene.revision() != before);
+        scene.destroy(no_body);
+    });
+    test("edits between steps still reach the physics world", [] {
+        Scene scene;
+        (void)floor(scene);
+        const auto box = scene.create(body({0, 3, 0}));
+        PhysicsWorld physics(scene);
+        physics.step(1.0 / 60.0);
+        auto moved = scene.get(box);
+        moved.transform.position = {5, 3, 0};
+        moved.rigid_body->linear_velocity = {0, 0, 0};
+        scene.set(box, moved);
+        physics.step(1.0 / 60.0);
+        near(scene.get(box).transform.position.x, 5, 0.001F);
+        near(scene.get(box).transform.position.y, 3, 0.01F);
+    });
+    test("saved physics states rewind the world and replay deterministically", [] {
+        Scene scene;
+        const auto arm = pendulum(scene, 0, {0, 2, 0}, 1.2F, 0.1F);
+        PhysicsWorld physics(scene);
+        physics.set_joint_state(arm, 0.8F, 0.5F);
+        const auto saved = physics.save_state();
+        const auto start = scene.get(arm).transform.position;
+        auto run = [&] {
+            for (int i = 0; i < 50; ++i) {
+                physics.apply_joint_force(arm, 2);
+                physics.step(1.0 / 60.0);
+            }
+            return physics.joint_state(arm);
+        };
+        const auto first = run();
+        CHECK(std::abs(first.position - 0.8F) > 0.05F);
+        physics.restore_state(saved);
+        near(physics.joint_state(arm).position, 0.8F, 0.0001F);
+        near(physics.joint_state(arm).velocity, 0.5F, 0.0001F);
+        CHECK(glm::length(scene.get(arm).transform.position - start) < 0.0001F);
+        const auto second = run();
+        near(second.position, first.position, 0.0001F);
+        near(second.velocity, first.velocity, 0.0001F);
+    });
+    auto arm_id = [](const Scene& scene) {
+        for (auto id : scene.entities())
+            if (scene.get(id).joint)
+                return id;
+        throw std::runtime_error("no jointed entity");
+    };
+    test("restoring a state requires the bodies and joints it was saved with", [&] {
+        Scene scene;
+        (void)pendulum(scene, 0, {0, 2, 0});
+        PhysicsWorld physics(scene);
+        rejects([&] { physics.restore_state(PhysicsState{}); });
+        const auto saved = physics.save_state();
+        const auto extra = scene.create(body({3, 3, 0}));
+        rejects([&] { physics.restore_state(saved); });
+        scene.destroy(extra);
+        physics.restore_state(saved);
+        auto stiffer = scene.get(arm_id(scene));
+        stiffer.joint->damping = 1;
+        scene.set(arm_id(scene), stiffer);
+        rejects([&] { physics.restore_state(saved); });
+    });
     std::cout << passed << " passed, " << failed << " failed\n";
     return failed == 0 ? 0 : 1;
 }

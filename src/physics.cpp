@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <vsim/physics.hpp>
@@ -157,6 +158,9 @@ struct PhysicsWorld::Impl {
         Joint component;
         JPH::BodyID child;
         JPH::BodyID parent; // Invalid when attached to the world.
+        bool hinge;
+        bool parent_dynamic;  // Receives the reaction of joint forces.
+        std::uint64_t serial; // Unique per constraint built by this world.
     };
     Scene& scene;
     Layers layers;
@@ -168,9 +172,22 @@ struct PhysicsWorld::Impl {
     std::map<EntityId, NativeJoint> joints;
     std::vector<JPH::Ref<JPH::GroupFilterTable>> filters;
     bool joints_changed{false};
+    // Scene revision the bodies and joints were last reconciled with; sync() is
+    // free while it matches.
+    std::uint64_t synced_revision{0};
+    std::uint64_t constraints_built{0};
+    // The world is single-threaded, so body access skips Jolt's body locks.
+    JPH::BodyInterface& bodies_interface() {
+        return system.GetBodyInterfaceNoLock();
+    }
+    const JPH::BodyInterface& bodies_interface() const {
+        return system.GetBodyInterfaceNoLock();
+    }
 
     explicit Impl(Scene& source) : scene(source) {
-        system.Init(static_cast<JPH::uint>(Scene::max_entities + 1), 0, 65536, 20000, layers,
+        // One body mutex: the world is single-threaded, and Jolt locks every
+        // mutex on each update (its default scales them with the core count).
+        system.Init(static_cast<JPH::uint>(Scene::max_entities + 1), 1, 65536, 20000, layers,
                     layers, layers);
         system.SetGravity(JPH::Vec3(0, -9.81F, 0));
         // Use Jolt's identity filter. In 5.3, the null-filter fast path aliases a
@@ -185,8 +202,8 @@ struct PhysicsWorld::Impl {
         joints.clear();
         for (const auto& [id, body] : bodies) {
             (void)id;
-            system.GetBodyInterface().RemoveBody(body.id);
-            system.GetBodyInterface().DestroyBody(body.id);
+            bodies_interface().RemoveBody(body.id);
+            bodies_interface().DestroyBody(body.id);
         }
     }
     Body create(EntityId id, const Entity& entity) {
@@ -225,7 +242,7 @@ struct PhysicsWorld::Impl {
         settings.mMassPropertiesOverride.mMass = component.mass;
         if (motion == JPH::EMotionType::Dynamic)
             settings.mAllowedDOFs = allowed_dofs(component);
-        auto& interface = system.GetBodyInterface();
+        auto& interface = bodies_interface();
         const auto body = interface.CreateAndAddBody(settings, motion == JPH::EMotionType::Static
                                                                    ? JPH::EActivation::DontActivate
                                                                    : JPH::EActivation::Activate);
@@ -234,8 +251,8 @@ struct PhysicsWorld::Impl {
         return {body, transform, component, false};
     }
     void remove(JPH::BodyID body) {
-        system.GetBodyInterface().RemoveBody(body);
-        system.GetBodyInterface().DestroyBody(body);
+        bodies_interface().RemoveBody(body);
+        bodies_interface().DestroyBody(body);
     }
     void remove_joints_touching(JPH::BodyID body) {
         std::erase_if(joints, [&](auto& item) {
@@ -302,7 +319,10 @@ struct PhysicsWorld::Impl {
         }
         system.AddConstraint(constraint);
         joints_changed = true;
-        return {constraint, joint, child, parent};
+        const bool parent_dynamic =
+            joint.parent != 0 && scene.get(joint.parent).rigid_body->motion == "dynamic";
+        return {constraint,         joint, child, parent, joint.type == "hinge", parent_dynamic,
+                ++constraints_built};
     }
     // Bodies connected by a joint never collide with each other.
     void rebuild_groups() {
@@ -348,7 +368,7 @@ struct PhysicsWorld::Impl {
             filters.push_back(table);
             ++group;
         }
-        auto& interface = system.GetBodyInterface();
+        auto& interface = bodies_interface();
         for (auto& [id, body] : bodies) {
             const auto found = assignments.find(id);
             if (found != assignments.end()) {
@@ -388,7 +408,7 @@ struct PhysicsWorld::Impl {
         return found->second;
     }
     JointState state(const NativeJoint& joint) const {
-        const auto& interface = system.GetBodyInterface();
+        const auto& interface = bodies_interface();
         const auto axis =
             glm::normalize(gquat(interface.GetRotation(joint.child)) * joint.component.axis);
         const auto child_position = gvec(interface.GetPosition(joint.child));
@@ -400,7 +420,7 @@ struct PhysicsWorld::Impl {
                                        child_position - gvec(interface.GetPosition(joint.parent)));
         }
         JointState result;
-        if (joint.component.type == "hinge") {
+        if (joint.hinge) {
             result.position = static_cast<const JPH::HingeConstraint*>(joint.constraint.GetPtr())
                                   ->GetCurrentAngle();
             result.velocity =
@@ -415,30 +435,34 @@ struct PhysicsWorld::Impl {
     }
     void add_joint_force(EntityId id, const NativeJoint& joint, float value) {
         const auto axis = joint_frame(scene.get(id)).axis * value;
-        auto& interface = system.GetBodyInterface();
-        const bool parent_dynamic =
-            joint.component.parent != 0 &&
-            scene.get(joint.component.parent).rigid_body->motion == "dynamic";
-        if (joint.component.type == "hinge") {
+        auto& interface = bodies_interface();
+        if (joint.hinge) {
             interface.AddTorque(joint.child, jvec(axis));
-            if (parent_dynamic)
+            if (joint.parent_dynamic)
                 interface.AddTorque(joint.parent, jvec(-axis));
         } else {
             interface.AddForce(joint.child, jvec(axis));
-            if (parent_dynamic)
+            if (joint.parent_dynamic)
                 interface.AddForce(joint.parent, jvec(-axis));
         }
     }
     void store(EntityId id, Body& body) {
-        const auto& interface = system.GetBodyInterface();
-        auto entity = scene.get(id);
-        entity.transform.position = gvec(interface.GetPosition(body.id));
-        entity.transform.rotation = gquat(interface.GetRotation(body.id));
-        entity.rigid_body->linear_velocity = gvec(interface.GetLinearVelocity(body.id));
-        entity.rigid_body->angular_velocity = gvec(interface.GetAngularVelocity(body.id));
-        scene.set(id, entity);
-        body.transform = entity.transform;
-        body.component = *entity.rigid_body;
+        const auto& interface = bodies_interface();
+        scene.set_motion(id, gvec(interface.GetPosition(body.id)),
+                         gquat(interface.GetRotation(body.id)),
+                         gvec(interface.GetLinearVelocity(body.id)),
+                         gvec(interface.GetAngularVelocity(body.id)));
+        const auto& entity = scene.get(id);
+        body.transform.position = entity.transform.position;
+        body.transform.rotation = entity.transform.rotation;
+        body.component.linear_velocity = entity.rigid_body->linear_velocity;
+        body.component.angular_velocity = entity.rigid_body->angular_velocity;
+    }
+    // Writes every body back to the scene; the scene then matches the world.
+    void store_all() {
+        for (auto& [id, body] : bodies)
+            store(id, body);
+        synced_revision = scene.revision();
     }
 };
 
@@ -451,7 +475,9 @@ PhysicsWorld::~PhysicsWorld() = default;
 
 void PhysicsWorld::sync() {
     auto& world = *impl_;
-    auto& interface = world.system.GetBodyInterface();
+    if (world.synced_revision != 0 && world.scene.revision() == world.synced_revision)
+        return;
+    auto& interface = world.bodies_interface();
     std::erase_if(world.bodies, [&](const auto& item) {
         if (world.scene.alive(item.first) && world.scene.get(item.first).rigid_body)
             return false;
@@ -522,6 +548,7 @@ void PhysicsWorld::sync() {
     }
     if (world.joints_changed)
         world.rebuild_groups();
+    world.synced_revision = world.scene.revision();
 }
 
 void PhysicsWorld::step(double delta) {
@@ -538,8 +565,46 @@ void PhysicsWorld::step(double delta) {
         world.system.Update(static_cast<float>(delta), 1, &world.allocator, &world.jobs);
     if (result != JPH::EPhysicsUpdateError::None)
         throw std::runtime_error("Jolt exceeded its collision capacity");
-    for (auto& [id, body] : world.bodies)
-        world.store(id, body);
+    world.store_all();
+}
+
+PhysicsState PhysicsWorld::save_state() {
+    sync();
+    PhysicsState state;
+    for (const auto& [id, body] : impl_->bodies)
+        state.bodies_.emplace_back(id, body.id.GetIndexAndSequenceNumber());
+    for (const auto& [id, joint] : impl_->joints)
+        state.joints_.emplace_back(id, joint.serial);
+    JPH::StateRecorderImpl recorder;
+    impl_->system.SaveState(recorder);
+    state.data_ = recorder.GetData();
+    return state;
+}
+
+void PhysicsWorld::restore_state(const PhysicsState& state) {
+    if (state.empty())
+        throw std::invalid_argument("physics state is empty");
+    sync();
+    auto& world = *impl_;
+    bool same =
+        state.bodies_.size() == world.bodies.size() && state.joints_.size() == world.joints.size();
+    for (std::size_t i = 0; same && i < state.bodies_.size(); ++i) {
+        const auto found = world.bodies.find(state.bodies_[i].first);
+        same = found != world.bodies.end() &&
+               found->second.id.GetIndexAndSequenceNumber() == state.bodies_[i].second;
+    }
+    // A rebuilt constraint (a changed joint) no longer matches its saved warm start.
+    for (std::size_t i = 0; same && i < state.joints_.size(); ++i) {
+        const auto found = world.joints.find(state.joints_[i].first);
+        same = found != world.joints.end() && found->second.serial == state.joints_[i].second;
+    }
+    if (!same)
+        throw std::invalid_argument("physics state was saved with other bodies or joints");
+    JPH::StateRecorderImpl recorder;
+    recorder.WriteBytes(state.data_.data(), state.data_.size());
+    if (!world.system.RestoreState(recorder))
+        throw std::runtime_error("Jolt could not restore the physics state");
+    world.store_all();
 }
 
 void PhysicsWorld::apply_impulse(EntityId id, glm::vec3 impulse) {
@@ -554,12 +619,12 @@ void PhysicsWorld::apply_impulse(EntityId id, glm::vec3 impulse) {
         throw std::invalid_argument("impulse would exceed the 500 m/s velocity limit");
     sync();
     const auto body = impl_->bodies.at(id).id;
-    impl_->system.GetBodyInterface().AddImpulse(body, jvec(impulse));
+    impl_->bodies_interface().AddImpulse(body, jvec(impulse));
     auto changed = impl_->scene.get(id);
-    changed.rigid_body->linear_velocity =
-        gvec(impl_->system.GetBodyInterface().GetLinearVelocity(body));
+    changed.rigid_body->linear_velocity = gvec(impl_->bodies_interface().GetLinearVelocity(body));
     impl_->scene.set(id, changed);
     impl_->bodies.at(id).component = *changed.rigid_body;
+    impl_->synced_revision = impl_->scene.revision();
 }
 
 JointState PhysicsWorld::joint_state(EntityId id) {
@@ -582,7 +647,7 @@ void PhysicsWorld::set_joint_state(EntityId id, float position, float velocity) 
     const auto frame = joint_frame(world.scene.get(id));
     const bool hinge = component.type == "hinge";
     const auto rotation = glm::angleAxis(delta_position, frame.axis);
-    const auto& interface = world.system.GetBodyInterface();
+    const auto& interface = world.bodies_interface();
     // Compute and validate every new pose before touching any body.
     struct Move {
         EntityId id;
@@ -612,7 +677,7 @@ void PhysicsWorld::set_joint_state(EntityId id, float position, float velocity) 
         entity.validate();
         moves.push_back({member, std::move(entity)});
     }
-    auto& mutable_interface = world.system.GetBodyInterface();
+    auto& mutable_interface = world.bodies_interface();
     for (const auto& move : moves) {
         auto& body = world.bodies.at(move.id);
         const auto& t = move.entity.transform;
@@ -623,6 +688,7 @@ void PhysicsWorld::set_joint_state(EntityId id, float position, float velocity) 
                                                       jvec(b.angular_velocity));
         world.store(move.id, body);
     }
+    world.synced_revision = world.scene.revision();
 }
 
 void PhysicsWorld::apply_joint_force(EntityId id, float value) {
@@ -637,7 +703,7 @@ bool PhysicsWorld::touching(EntityId first, EntityId second) {
     const auto a = impl_->bodies.at(first).id, b = impl_->bodies.at(second).id;
     if (a == b)
         return false;
-    const auto& interface = impl_->system.GetBodyInterface();
+    const auto& interface = impl_->bodies_interface();
     const auto shape = interface.GetShape(a);
     const auto transform = interface.GetCenterOfMassTransform(a);
     JPH::CollideShapeSettings settings;

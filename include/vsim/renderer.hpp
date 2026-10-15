@@ -68,6 +68,8 @@ class Renderer {
     void wait_idle();
     void resize(std::uint32_t width, std::uint32_t height);
     [[nodiscard]] Image capture();
+    // Same, reusing `image`'s storage (for capturing every frame of a video).
+    void capture(Image& image);
     [[nodiscard]] std::string device_name() const;
     [[nodiscard]] unsigned int validation_errors() const;
 

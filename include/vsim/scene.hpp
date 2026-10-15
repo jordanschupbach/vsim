@@ -100,6 +100,16 @@ class Scene {
     [[nodiscard]] bool alive(EntityId id) const noexcept;
     [[nodiscard]] const Entity& get(EntityId id) const;
     void set(EntityId id, Entity entity);
+    // Writes a rigid body's simulated pose and velocities, validating only those
+    // fields (the physics write-back path; set() revalidates the whole entity).
+    void set_motion(EntityId id, glm::vec3 position, glm::quat rotation, glm::vec3 linear_velocity,
+                    glm::vec3 angular_velocity);
+    // Changes whenever the entities change, and is unique across scenes: two
+    // scenes with the same revision hold the same entities. Lets observers
+    // such as PhysicsWorld skip reconciliation when nothing was edited.
+    [[nodiscard]] std::uint64_t revision() const noexcept {
+        return revision_;
+    }
     [[nodiscard]] std::vector<EntityId> entities() const;
     [[nodiscard]] std::size_t size() const noexcept;
     void define_prefab(std::string name, Entity entity);
@@ -108,7 +118,9 @@ class Scene {
     [[nodiscard]] static Scene from_json(const Json& data);
 
   private:
+    void touch() noexcept;
     EntityId next_id_{1};
+    std::uint64_t revision_{0};
     std::map<EntityId, Entity> entities_;
     std::map<std::string, Entity> prefabs_;
 };

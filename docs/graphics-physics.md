@@ -86,6 +86,21 @@ until the next step and are then cleared, like Jolt forces. The adapter applies
 `damping` itself before each step. Limits are hard; a fast body overshoots a
 limit by at most one step before the solver returns it.
 
+`PhysicsWorld::save_state` copies the simulation state (body poses and
+velocities, contact caches, constraint warm starts) and `restore_state` rewinds
+the world and its scene to it without rebuilding any Jolt object, which is how
+episodic users such as reinforcement-learning environments reset: building a
+world (sized for `Scene::max_entities` bodies) costs far more than an episode's
+first steps. A state restores only into a world with the same bodies and joints
+it was saved with; otherwise `restore_state` throws and changes nothing.
+Replaying the same forces after a restore reproduces the same trajectory.
+
+Synchronization is incremental: `Scene::revision()` changes on every edit, so
+the world reconciles the scene only when it was edited since the world last
+wrote it, and the per-step write-back (`Scene::set_motion`) validates only the
+pose and velocities it changes. The world is single-threaded and uses one body
+mutex and Jolt's lock-free body interface.
+
 `Simulation` owns a physics world and Lua instances. Scene references must outlive
 it and must not be replaced underneath it. See [Lua lifecycle](scripting.md).
 

@@ -5,6 +5,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -231,6 +232,11 @@ void RigidBody::validate() const {
     }
 }
 
+void Scene::touch() noexcept {
+    static std::atomic<std::uint64_t> next_revision{1};
+    revision_ = next_revision.fetch_add(1, std::memory_order_relaxed);
+}
+
 EntityId Scene::create(Entity entity) {
     entity.validate();
     if (entities_.size() >= max_entities || next_id_ >= max_id) {
@@ -239,6 +245,7 @@ EntityId Scene::create(Entity entity) {
     const auto id = next_id_;
     entities_.emplace(id, std::move(entity));
     ++next_id_;
+    touch();
     return id;
 }
 
@@ -246,6 +253,7 @@ void Scene::destroy(EntityId id) {
     if (entities_.erase(id) != 1) {
         throw std::out_of_range("entity does not exist");
     }
+    touch();
 }
 
 bool Scene::alive(EntityId id) const noexcept {
@@ -259,6 +267,26 @@ const Entity& Scene::get(EntityId id) const {
 void Scene::set(EntityId id, Entity entity) {
     entity.validate();
     entities_.at(id) = std::move(entity);
+    touch();
+}
+
+void Scene::set_motion(EntityId id, glm::vec3 position, glm::quat rotation,
+                       glm::vec3 linear_velocity, glm::vec3 angular_velocity) {
+    auto& entity = entities_.at(id);
+    if (!entity.rigid_body)
+        throw std::invalid_argument("motion state requires a rigid body");
+    auto transform = entity.transform;
+    transform.position = position;
+    transform.rotation = rotation;
+    transform.validate();
+    auto body = *entity.rigid_body;
+    body.linear_velocity = linear_velocity;
+    body.angular_velocity = angular_velocity;
+    body.validate();
+    entity.transform = transform;
+    entity.rigid_body->linear_velocity = linear_velocity;
+    entity.rigid_body->angular_velocity = angular_velocity;
+    touch();
 }
 
 std::vector<EntityId> Scene::entities() const {
@@ -510,6 +538,7 @@ Scene Scene::from_json(const Json& data) {
             scene.define_prefab(name, entity_from_json(entity));
         }
     }
+    scene.touch();
     return scene;
 }
 } // namespace vsim
